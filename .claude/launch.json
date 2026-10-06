@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "clawd-room",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["bin/clawd-room.js"],
+      "port": 4747
+    }
+  ]
+}

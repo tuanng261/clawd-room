@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clawd's Room</title>
+  <meta name="description" content="A live 3D room where Claude Code's mascot acts out what your sessions are doing.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -3 18 16'%3E%3Cpath fill='%23D97757' d='M3 0h12v2H3zM3 2h2v2H3zM6 2h6v2H6zM13 2h2v2h-2zM1 4h16v2H1zM3 6h12v2H3zM4 8h1v2H4zM6 8h1v2H6zM11 8h1v2h-1zM13 8h1v2h-1z'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen&family=VT323&display=swap">
+  <link rel="stylesheet" href="/style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/build/three.module.js",
+        "three/addons/": "/vendor/three/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="stage" aria-label="3D room showing what Claude is doing"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"></span>
+      <div class="brand-text"><b>Clawd's Room</b><span>Claude Code · live</span></div>
+    </div>
+    <div class="switcher">
+      <button id="sessionBtn" class="session-btn" aria-haspopup="listbox" aria-expanded="false">
+        <span class="dot"></span><span class="session-text"><b>Looking for sessions…</b><small></small></span>
+        <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div id="sessionMenu" class="menu" role="listbox" hidden></div>
+    </div>
+    <div class="top-right">
+      <div class="stylepick">
+        <button id="styleBtn" class="style-btn" aria-haspopup="listbox" aria-expanded="false" title="Room style">
+          <small>Room</small><b>Auto</b>
+        </button>
+        <div id="styleMenu" class="menu style-menu" role="listbox" hidden></div>
+      </div>
+      <span id="conn" class="conn"><i></i><span>Connecting</span></span>
+    </div>
+  </header>
+
+  <aside id="side" class="side">
+    <section id="inspector" class="panel inspector" aria-label="What Claude is doing"></section>
+    <section id="chat" class="panel chat" aria-label="Play by play">
+      <div class="chat-head"><h3>What Clawd is doing</h3><span class="live-dot" aria-hidden="true"></span></div>
+      <div id="chatList" class="chat-list" aria-live="polite"></div>
+      <div id="chatTyping" class="bub clawd t-think typing" hidden><span class="bi"></span><p aria-label="Thinking"><i></i><i></i><i></i></p></div>
+    </section>
+  </aside>
+  <section id="progress" class="panel progress"></section>
+
+  <nav class="mapctl" aria-label="Camera">
+    <button data-cam="in" title="Zoom in"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+    <button data-cam="out" title="Zoom out"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+    <span class="sep"></span>
+    <button data-cam="fit" title="Show the whole room"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+    <button data-cam="follow" title="Follow Clawd"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="6" height="6"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg></button>
+  </nav>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+{
+  "name": "clawd-room",
+  "version": "0.1.0",
+  "description": "A tiny 3D room where your coding agent's mascot acts out what it's doing: Clawd for Claude Code, a terminal buddy for Codex.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "clawd-room": "bin/clawd-room.js"
+  },
+  "files": [
+    "bin",
+    "server",
+    "web",
+    "README.md"
+  ],
+  "scripts": {
+    "start": "node bin/clawd-room.js",
+    "dev": "node --watch-path=server --watch-path=bin bin/clawd-room.js",
+    "check": "node server/selftest.js",
+    "widget": "bash widget/build.sh && open \"build/Clawd Widget.app\"",
+    "package": "bash widget/package.sh"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "visualizer",
+    "three.js",
+    "agent"
+  ],
+  "dependencies": {
+    "three": "^0.186.1"
+  }
+}
