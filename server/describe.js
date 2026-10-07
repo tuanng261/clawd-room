@@ -141,16 +141,63 @@ function commandActivity(c, d, raw = c) {
     if (/\s-ss\s|\s-to\s|\s-t\s|\btrim\b|segment|concat/i.test(raw) || /\b(cut|trim|split|clip|join|concat)/.test(d)) return 'cut';
     return 'render';
   }
-  if (has(/\b(remotion|hyperframes|blender|melt)\b/)) return 'render';
+  if (has(/\b(remotion|hyperframes|blender|melt|avconvert|handbrakecli)\b/)) return 'render';
   if (has(/\b(magick|mogrify|sips|pngquant|optipng|cwebp|svgo|imagemin)\b/) || cmd('convert')) return 'image';
   if (has(/\b(curl|httpie|xh)\b/)) return 'http';
   if (has(/\b(while|for|until)\b[^|]*\bsleep\b/) || cmd('sleep|wait')) return 'wait';
-  if (cmd('rm|rmdir|trash|unlink')) return 'delete';
-  if (cmd('mv|cp|mkdir|rsync|ln|zip|unzip|tar|ditto')) return 'files';
+  // Output piped through grep/tail/wc… is just being trimmed: those don't say what the step is.
+  const core = c.replace(/\|\s*(grep|rg|head|tail|wc|sort|uniq|awk|sed|cut|tr|tee|cat|less|jq)\b[^|;&]*/g, ' ');
+  const plumb = (names) => new RegExp(`(^|[;&|(]\\s*|\\s)(${names})(\\s|$)`).test(core);
+  if (plumb('rm|rmdir|trash|unlink')) return 'delete';
+  if (plumb('mv|cp|mkdir|rsync|ln|zip|unzip|tar|ditto')) return 'files';
   if (cmd('kill|pkill|killall') || /\bxargs kill\b/.test(c)) return 'stop';
   if (cmd('open|xdg-open')) return 'deliver';
   if (has(/\bgit (status|diff|log|show|blame|branch|checkout|switch|stash|add|restore|reset|rebase|merge|tag|remote|worktree)\b/)) return 'git';
-  if (cmd('ls|find|tree|du|wc|cat|head|tail|grep|rg|ag|fd|stat|file|less|which')) return 'search';
+  if (plumb('ls|find|tree|du|wc|cat|head|tail|grep|rg|ag|fd|stat|file|less|which')) return 'search';
+  return null;
+}
+
+// What a step says it does, from its first verb: "Capture the console pages", "Re-voice the lead",
+// "Convert both takes to SDR". Checked in order; the first match wins.
+const VERB_ACTIVITY = [
+  [/^(capture|screenshot|snap|grab) /, 'screenshot'],
+  [/^(make|generate|extract|pull|build) .*\b(frames?|proxies|proxy|thumbnails?|stills|contact sheets?|review sheets?)\b/, 'frames'],
+  [/^(convert|make|transcode) .*\b(takes?|clips?|videos?|footage|prores|h\.?26[45]|hevc|sdr|hdr|4k|mp4|mov)\b/, 'render'],
+  [/^(convert|resize|crop|compress|optimi[sz]e) .*\b(images?|photos?|pngs?|jpe?gs?|webp|icons?|screenshots?)\b/, 'image'],
+  [/^(render|export|encode|transcode|bounce) /, 'render'],
+  [/^(grade|colou?r[- ]grade|colou?r[- ]correct|match the colou?r)/, 'grade'],
+  [/^(cut|trim|split|splice|join|concat) /, 'cut'],
+  [/^(voice|narrate|dub|speak) /, 'voice'],
+  [/^(caption|subtitle) /, 'captions'],
+  [/^transcribe /, 'listen'],
+  [/^(explore|browse|crawl|scrape|click through|navigate) /, 'browse'],
+  [/^(test |run (the )?(unit |e2e |browser |integration |end-to-end )?tests?\b)/, 'test'],
+  [/^(build|compile|bundle) /, 'build'],
+  [/^(deploy|ship|publish) /, 'deploy'],
+  [/^install /, 'install'],
+  [/^(download|fetch|clone) /, 'download'],
+  [/^(copy|move|rename|organi[sz]e|archive|zip|unzip|back ?up) /, 'files'],
+  [/^(delete|remove|clean ?up|clear out) /, 'delete'],
+  [/^(search|find|look for|list|count) /, 'search'],
+  [/^(wait|poll|keep waiting)\b/, 'wait'],
+];
+
+/** The activity a description's first verb names ("Re-capture …" counts as capture), or null. */
+function leadVerbActivity(d) {
+  const s = `${d.trim().replace(/^(now|then|also|first|next|quickly)\s+/, '').replace(/^re-?(?=(capture|render|run|voice|grade|cut|export|encode|build|test|deploy|download|convert)\b)/, '')} `;
+  for (const [re, act] of VERB_ACTIVITY) if (re.test(s)) return act;
+  return null;
+}
+
+/** A project script's name often says what it does: capture-marketplace.mjs, look_and_cut.sh, enhance_voice.sh. */
+function scriptActivity(raw) {
+  const names = [...raw.matchAll(/([\w.-]+)\.(m?js|ts|py|sh|zsh|rb)\b/g)].map((m) => m[1].toLowerCase()).join(' ');
+  if (!names) return null;
+  for (const [re, act] of [[/captur|screenshot|snap/, 'screenshot'], [/render|export|encode/, 'render'], [/grade|look|lut|colou?r/, 'grade'], [/cut|trim/, 'cut'],
+    [/voice|tts|speech|narrat/, 'voice'], [/transcri|whisper/, 'listen'], [/explor|crawl|browse|scrape/, 'browse'], [/frame|prox|thumb/, 'frames'],
+    [/deploy|publish/, 'deploy'], [/build|compile/, 'build'], [/test|spec/, 'test']]) {
+    if (re.test(names)) return act;
+  }
   return null;
 }
 
@@ -171,15 +218,21 @@ function descriptionActivity(d) {
   return null;
 }
 
-/** Shell commands: the command decides; a wait loop happens wherever the thing it waits for lives. */
+/**
+ * Shell commands: a specific tool in the command decides (ffmpeg, git push, pytest…).
+ * Plumbing (mkdir, cd, piping through tail) says little, so then what the step says
+ * it does (its first verb), or the script it runs, decides. A wait loop happens
+ * wherever the thing it waits for lives.
+ */
 export function bashActivity(command, description = '') {
   const raw = ` ${String(command || '').replace(/\s+/g, ' ')} `;
   const c = ` ${commandsOnly(String(command || '')).replace(/\s+/g, ' ')} `;
   const d = String(description || '').toLowerCase();
   const byCmd = commandActivity(c, d, raw);
-  const byDesc = descriptionActivity(d);
-  if (byCmd === 'wait' && byDesc && byDesc !== 'wait') return byDesc;
-  return byCmd || byDesc || 'run';
+  const waitingFor = descriptionActivity(d); // "Wait for the render" → at the render tower
+  if (byCmd === 'wait' && waitingFor && waitingFor !== 'wait') return waitingFor;
+  if (byCmd && byCmd !== 'files' && byCmd !== 'search') return byCmd;
+  return leadVerbActivity(d) || scriptActivity(raw) || byCmd || descriptionActivity(d) || 'run';
 }
 
 /** A command with no description, in plain words ("Checking what changed", "Reading app.tsx"). */
@@ -385,6 +438,7 @@ function describeInner(name, i) {
         station: 'terminal', icon: 'terminal',
         verb: i.run_in_background ? 'Starting in the background' : 'Running',
         label: clip(i.description || i.command, 60), detail: clip(i.command, 600),
+        about: i.run_in_background && i.description ? clip(i.description, 240) : null,
         text: said ? said + (i.run_in_background ? ' (background)' : '') : null,
         background: !!i.run_in_background, timeoutMs: i.timeout || null,
       };

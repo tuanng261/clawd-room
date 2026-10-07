@@ -115,7 +115,10 @@ When someone's sessions are about something the room doesn't act out well yet
 2. **Name the work.** For each distinct kind of step, pick an activity: reuse
    one from `web/js/activities.js` if it truly looks the same, otherwise add one.
 3. **Classify it** in `server/describe.js`: `commandActivity` (shell commands;
-   most specific first, command beats description), `descriptionActivity`,
+   most specific first; a specific tool in the command beats the description,
+   but plumbing like `mkdir`, `cd` or `| grep`/`| tail` doesn't count, and then
+   the description's first verb (`VERB_ACTIVITY`) or the script's name
+   (`scriptActivity`) decides), `descriptionActivity`,
    `fileActivity` (by extension), `mcpActivity` (by connector brand and tool).
    Test right away:
    ```bash
@@ -172,6 +175,36 @@ window.clawdRoom.hud.onStyle('auto');
 
 Helpers call `planFor(act, true, taken)` and prefer pieces nobody uses; spare
 furniture (no station role) beats someone's busy station.
+
+## Helpers and background tasks
+
+Subagents are mini Clawds in caps (`syncHelpers`); background commands
+(`s.jobs`, kind `shell`) are smaller ones in hard hats (`syncWorkers`). Both pick
+their spot with `planFor(act, true, taken)` so nobody piles onto the same
+piece, and both get feelings (`helperFeeling`, `workFeeling`). Workers hop out
+of the terminal, and when their job is done bring the result to Clawd
+(`finishWorker`) before leaving by the door. The server records each job's
+`activity` so a background render goes to the render tower.
+
+## Walking and moving things
+
+- The floor grid (`NavGrid`, `web/js/nav.js`) blocks each solid piece's real
+  footprint (its own box, turned with it: `footprint()` in `room.js`) plus a
+  margin. Spots pressed against furniture (a desk seat, the armchair, a
+  whiteboard) get an `approach` from the open side (`wayOut`), and Clawd leaves
+  a spot the way it came in (`route`). Never let a path go through a piece.
+- Light pieces (`PUSHABLE` kinds) block like anything else, but when one is
+  the only way through, or going around is at least `SHOVE_SAVES` longer,
+  Clawd pushes it aside, or pulls it while stepping backwards if there's no
+  room behind it (`planShove` → `goShove` → `updateShove`). Spots drawn with
+  `k.at()` follow their piece (`rel`). After `TIDY_AFTER` of nothing to do it
+  puts things back (`tidyIntent`), unless that would wall it off from bed.
+- Nothing can be moved? It squeezes past light things (`navSqueeze`, bodies
+  only); walking straight is the very last resort.
+- New furniture: if it's light, add its kind to `PUSHABLE`; place stations
+  with `k.at()`; then check every trip in every room (`room.route()` between
+  all pairs of `room.st` spots, sampled every 5 cm against `room.bodies`) goes
+  through nothing.
 
 ## The widget
 

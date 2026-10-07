@@ -38,6 +38,7 @@ function kit(room) {
     const out = { spot: tx(lx, lz), face: g.rotation.y + face };
     if (seat) out.seat = seat;
     if (approach) out.approach = tx(approach[0], approach[1]);
+    out.rel = { g, lx, lz, face, approach }; // lets the spot follow the piece if Clawd pushes it aside
     return out;
   };
   const toward = (from, to) => Math.atan2(to[0] - from[0], to[1] - from[1]);
@@ -282,8 +283,8 @@ function classroom(room, pal) {
   const cat = k.put(K.cardCatalog(), -3.78, 0.35, Math.PI / 2);
   k.put(K.poster(1.25, 0.78, D.drawWorldMap, { frame: C.charcoal }), -4.0, 0.35, Math.PI / 2, { y: 2.2, solid: false });
   const door = leftDoor(k, pal, 1.75);
-  // Two rows of student desks facing the chalkboard.
-  [[-1.6, 0.15], [0.0, 0.15], [1.6, 0.15], [-0.8, 1.75], [0.8, 1.75]].forEach(([x, z], i) => k.put(K.studentDesk(i + 1), x, z, 0));
+  // Two rows of student desks facing the chalkboard, with an aisle down the middle.
+  [[-1.3, 0.15], [1.3, 0.15], [-1.3, 1.75], [1.3, 1.75]].forEach(([x, z], i) => k.put(K.studentDesk(i + 1), x, z, 0));
   const globe = k.put(K.globe(), 3.35, -0.85);
   const sci = k.put(K.scienceTable(), 2.75, 3.45);
   const nook = k.put(K.readingNook(pal), -2.85, 3.3, 0, { solid: false });

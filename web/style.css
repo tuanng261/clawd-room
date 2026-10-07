@@ -609,6 +609,9 @@ b.del { color: var(--error); font-weight: 400; }
 }
 .proptip.feeltip { transform: translateY(26px); }
 .proptip.feeltip b { font: 400 10px var(--pixel); }
+/* A background task's full description: wraps instead of running off the screen. */
+.proptip.feeltip.task span { max-width: 240px; white-space: normal; text-align: center; line-height: 1.3; }
+body.widget[data-mode="mini"] .proptip.feeltip.task span { display: block; max-width: 200px; font-size: 10.5px; }
 @media (prefers-reduced-motion: reduce) {
   .emopop { animation: emofade 2.4s linear both; }
   @keyframes emofade { 0%, 100% { opacity: 0; } 8%, 80% { opacity: 1; } }
@@ -621,21 +624,25 @@ body.widget:not([data-mode="full"]) :is(.topbar, .side, #progress, .mapctl, .toa
 body.widget[data-mode="pill"] #stage { display: none; }
 body.widget[data-mode="full"] :is(.wdg-cap, .wdg-pill, .wdg-grip) { display: none; }
 body.widget[data-mode="mini"] .wdg-pill, body.widget[data-mode="pill"] :is(.wdg-cap, .wdg-grip) { display: none; }
-/* A card-like frame around the small views (the Mac app rounds the window to match). */
-body.widget:not([data-mode="full"])::after {
+/* A card-like frame around the pill (the Mac app rounds the window to match). */
+body.widget[data-mode="pill"]::after {
   content: ""; position: fixed; inset: 0; z-index: 40; pointer-events: none;
   border: 2px solid var(--border); border-radius: 14px;
 }
-body.widget[data-tone="asking"]:not([data-mode="full"])::after { border-color: var(--sky); animation: wpulse 1.2s ease-in-out infinite; }
+body.widget[data-tone="asking"][data-mode="pill"]::after { border-color: var(--sky); animation: wpulse 1.2s ease-in-out infinite; }
 @keyframes wpulse { 50% { box-shadow: inset 0 0 0 3px rgba(106, 155, 204, 0.55); } }
+/* The corner view floats on the desktop: no background or frame, just the room (with a soft shadow) and a small label. */
+body.widget[data-mode="mini"] { background: transparent; }
+body.widget[data-mode="mini"]::before { display: none; }
+body.widget[data-mode="mini"] #stage canvas { filter: drop-shadow(0 7px 9px rgba(31, 30, 29, 0.3)); }
 /* Less clutter in the corner: the caption says what Clawd's label would. */
 body.widget[data-mode="mini"] .tag:not(.helper) { display: none; }
 body.widget[data-mode="mini"] .bubble.thought { max-width: 170px; font-size: 11px; }
 body.widget[data-mode="mini"] .proptip { font-size: 9px; }
 body.widget[data-mode="mini"] .proptip span { display: none; }
 
-/* drag strip along the top (the Mac app makes it a real handle) */
-.wdg-grip { position: fixed; top: 0; left: 0; right: 120px; height: 22px; z-index: 21; }
+/* drag strip along the top (unused now: the label is the handle) */
+.wdg-grip { display: none; position: fixed; top: 0; left: 0; right: 120px; height: 22px; z-index: 21; }
 .wdg-grip i { display: block; width: 38px; height: 4px; margin: 7px auto 0; background: rgba(61, 57, 41, 0.28); opacity: 0; transition: opacity 0.2s; }
 body.in-app .wdg-grip i { opacity: 0.45; }
 body.widget:hover .wdg-grip i { opacity: 1; }
@@ -657,15 +664,20 @@ body.in-app[data-mode="pill"] .wdg-pill { padding-right: 44px; }
 .top-right .wdg-ctl { position: static; opacity: 1; gap: 4px; }
 .top-right .wdg-ctl button { width: 30px; height: 30px; box-shadow: var(--shadow); }
 
-/* the caption bar under the corner view */
+/* the label under the floating room: what Clawd is doing, a timer, and the size buttons */
 .wdg-cap {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
-  height: 46px; display: flex; align-items: center; gap: 9px; padding: 0 12px 0 9px;
-  background: var(--ivory); border-top: 2px solid var(--border);
+  position: fixed; left: 50%; bottom: 6px; z-index: 20; transform: translateX(-50%);
+  max-width: calc(100% - 12px); height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 5px 0 5px;
+  background: var(--ivory); border: 2px solid var(--border); box-shadow: 3px 3px 0 rgba(61, 57, 41, 0.22);
 }
+.wdg-cap .wcb { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+body.widget[data-mode="mini"] .wdg-cap .wdg-ctl { position: static; opacity: 1; gap: 3px; transform: none; }
+.wdg-cap .wdg-ctl button { width: 22px; height: 22px; box-shadow: none; }
+body.widget[data-tone="asking"] .wdg-cap { border-color: var(--sky); animation: wpulse 1.2s ease-in-out infinite; }
 .wdg-cap .wm, .wdg-pill .wm { width: 28px; height: 28px; flex: none; display: grid; place-items: center; background: var(--clay); color: #fff; }
 .wdg-cap .wm svg { width: 15px; height: 15px; }
 .wdg-cap .wm .badge { width: 28px; height: 28px; border: 0; font-size: 10px; }
+.wdg-cap .wm, .wdg-cap .wm .badge { width: 26px; height: 26px; }
 .wdg-cap .wm .badge.tiny { font-size: 7.5px; }
 :is(.wdg-cap, .wdg-pill) .wx { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
 :is(.wdg-cap, .wdg-pill) .wx b { font-weight: 650; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

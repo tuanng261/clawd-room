@@ -1,10 +1,11 @@
 // Clawd's Room as a little window that floats in a corner of your Mac.
 //
 // A borderless panel shows the room's page in widget mode: a one-line pill, a
-// corner view of the room, or the full app. The small sizes stay above other
+// corner view of the room (the room floats right on the desktop, with a small
+// label under it), or the full app. The small sizes stay above other
 // windows on every Space (even over full-screen apps) without stealing focus.
-// Drag it anywhere and it snaps to the nearest corner; the menu bar icon shows,
-// hides and resizes it. If the room's server isn't running, the app starts it.
+// Drag it anywhere and it stays there (other sizes line up with that spot); the
+// menu bar icon shows, hides, resizes it and sends it to a corner. If the room's server isn't running, the app starts it.
 //
 // Build with widget/build.sh (for yourself: runs the server from this folder) or
 // widget/package.sh (to share: the server's files go inside the app, and Node
@@ -32,6 +33,26 @@ final class Panel: NSPanel {
 /// (otherwise that click only focuses the window and the button under it does nothing).
 final class WebView: WKWebView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// A trackpad pinch zooms the room (never the page itself): spread to go closer, pinch to back off.
+    var onPinch: ((Double, Bool) -> Void)?
+    var onSmartZoom: (() -> Void)?
+    override func magnify(with event: NSEvent) {
+        if event.phase == .began { widgetLog("pinch reached the room (window key: \(window?.isKeyWindow ?? false))") }
+        onPinch?(Double(event.magnification), event.phase == .ended || event.phase == .cancelled)
+    }
+    /// Two-finger double tap: close-up on Clawd, or back to the whole room.
+    override func smartMagnify(with event: NSEvent) { onSmartZoom?() }
+}
+
+/// A line in ~/Library/Logs/ClawdWidget.log (the server's output goes there too when the app starts it).
+func widgetLog(_ text: String) {
+    let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/ClawdWidget.log")
+    if !FileManager.default.fileExists(atPath: url.path) { FileManager.default.createFile(atPath: url.path, contents: nil) }
+    guard let h = try? FileHandle(forWritingTo: url) else { return }
+    h.seekToEndOfFile()
+    h.write("[widget \(Date())] \(text)\n".data(using: .utf8)!)
+    try? h.close()
 }
 
 /// A strip you grab to move the window. Clicks and double-clicks are passed on.
@@ -74,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private var server: Process?
     private var mode: Mode
     private var corner: String
+    private var offset: NSPoint // how far from that corner's two screen edges
     private var loaded = false
     private var noNode = false
 
@@ -82,6 +104,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let saved = Mode(rawValue: UserDefaults.standard.string(forKey: "mode") ?? "") ?? .mini
         mode = saved == .full ? .mini : saved
         corner = UserDefaults.standard.string(forKey: "corner") ?? "bottomRight"
+        offset = NSPoint(x: UserDefaults.standard.object(forKey: "offsetX") as? Double ?? 16,
+                         y: UserDefaults.standard.object(forKey: "offsetY") as? Double ?? 16)
         super.init()
     }
 
@@ -151,7 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         panel.hidesOnDeactivate = false
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = mode != .mini // the floating room draws its own shadow
         panel.acceptsMouseMovedEvents = true
         panel.minSize = NSSize(width: 240, height: 56)
         panel.delegate = self
@@ -159,7 +183,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let setup = WKWebViewConfiguration()
         setup.userContentController.add(self, name: "clawd")
         let bounds = NSRect(origin: .zero, size: rect.size)
-        web = WebView(frame: bounds, configuration: setup)
+        let view = WebView(frame: bounds, configuration: setup)
+        view.onPinch = { [weak self] amount, done in self?.pinch(amount, done) }
+        view.onSmartZoom = { [weak self] in self?.smartZoom() }
+        web = view
+        // Pinches can land elsewhere in the window than the room's view: catch them for the whole app.
+        NSEvent.addLocalMonitorForEvents(matching: [.magnify, .smartMagnify]) { [weak self] event in
+            guard let self, event.window === self.panel else { return event }
+            if event.type == .smartMagnify { self.smartZoom(); return nil }
+            if event.phase == .began { widgetLog("pinch caught by the app (window key: \(self.panel.isKeyWindow))") }
+            self.pinch(Double(event.magnification), event.phase == .ended || event.phase == .cancelled)
+            return nil
+        }
+        // The widget never takes focus, so a pinch over it goes to whichever app has focus. Watch for
+        // those too, and zoom the room when the pointer is over the widget. (Only watches; changes nothing.)
+        NSEvent.addGlobalMonitorForEvents(matching: [.magnify, .smartMagnify]) { [weak self] event in
+            guard let self, self.panel.isVisible, self.mode != .pill, self.panel.frame.contains(NSEvent.mouseLocation) else { return }
+            if event.type == .smartMagnify { self.smartZoom(); return }
+            if event.phase == .began { widgetLog("pinch over the widget while another app had focus") }
+            self.pinch(Double(event.magnification), event.phase == .ended || event.phase == .cancelled)
+        }
         web.autoresizingMask = [.width, .height]
         web.navigationDelegate = self
         web.setValue(false, forKey: "drawsBackground")
@@ -173,7 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         root.addSubview(grip)
         panel.contentView = root
 
-        grip.onMoved = { [weak self] in self?.snapToCorner() }
+        grip.onMoved = { [weak self] in self?.rememberPlace() }
         grip.onClick = { [weak self] in
             if self?.mode == .pill { self?.setMode(.mini) }
         }
@@ -185,33 +228,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         panel.orderFrontRegardless()
     }
 
-    /// Where the window goes for a size: small ones sit in the chosen corner, the full view in the middle.
+    /// The screen the widget lives on: the one you last put it on (if it's still plugged in).
+    private var homeScreen: NSScreen {
+        if let name = defaults.string(forKey: "screen"), let s = NSScreen.screens.first(where: { $0.localizedName == name }) { return s }
+        return panel?.screen ?? NSScreen.main ?? NSScreen.screens[0]
+    }
+
+    /// Where the window goes for a size: small ones where you left them (measured from the
+    /// nearest corner, so the pill and the corner view line up), the full view in the middle.
     private func frame(for m: Mode) -> NSRect {
-        let screen = (panel?.screen ?? NSScreen.main ?? NSScreen.screens[0]).visibleFrame
+        let screen = homeScreen.visibleFrame
         if m == .full {
             let w = min(1200, screen.width - 60)
             let h = min(780, screen.height - 60)
             return NSRect(x: screen.midX - w / 2, y: screen.midY - h / 2, width: w, height: h)
         }
         let size = m == .pill ? NSSize(width: 310, height: 60) : miniSize()
-        let margin: CGFloat = 16
-        let x = corner.hasSuffix("Left") ? screen.minX + margin : screen.maxX - margin - size.width
-        let y = corner.hasPrefix("bottom") ? screen.minY + margin : screen.maxY - margin - size.height
+        let ox = min(max(0, offset.x), max(0, screen.width - size.width)) // always fully on the screen
+        let oy = min(max(0, offset.y), max(0, screen.height - size.height))
+        let x = corner.hasSuffix("Left") ? screen.minX + ox : screen.maxX - ox - size.width
+        let y = corner.hasPrefix("bottom") ? screen.minY + oy : screen.maxY - oy - size.height
         return NSRect(x: x, y: y, width: size.width, height: size.height)
     }
+
+    /// Corner view sizes for the menu (Medium unless you pick another or resize it yourself).
+    private static let cornerSizes: [(id: String, title: String, size: NSSize)] = [
+        ("small", "Small", NSSize(width: 340, height: 310)),
+        ("medium", "Medium", NSSize(width: 410, height: 375)),
+        ("large", "Large", NSSize(width: 520, height: 475)),
+    ]
 
     private func miniSize() -> NSSize {
         let w = defaults.double(forKey: "miniWidth")
         let h = defaults.double(forKey: "miniHeight")
-        return w >= 260 && h >= 200 ? NSSize(width: w, height: h) : NSSize(width: 380, height: 300)
+        return w >= 260 && h >= 200 ? NSSize(width: w, height: h) : AppDelegate.cornerSizes[1].size
     }
 
-    /// The grab strip: the whole pill (minus its buttons), the top edge of the corner view, the logo in the full view.
+    /// Where the page says the corner view's label is (minus its buttons), in page coordinates.
+    private var labelRect: NSRect?
+
+    /// The grab strip: the whole pill (minus its buttons), the label under the floating room, the logo in the full view.
     private func layoutGrip() {
         guard let b = panel.contentView?.bounds else { return }
         switch mode {
         case .pill: grip.frame = NSRect(x: 0, y: 0, width: max(0, b.width - 40), height: b.height)
-        case .mini: grip.frame = NSRect(x: 0, y: b.height - 22, width: max(0, b.width - 120), height: 22)
+        case .mini:
+            // The page reports the label's spot (top-left origin); until then, a strip along the bottom.
+            if let r = labelRect { grip.frame = NSRect(x: r.minX, y: b.height - r.maxY, width: r.width, height: r.height) }
+            else { grip.frame = NSRect(x: 8, y: 6, width: max(0, b.width - 100), height: 40) }
         case .full: grip.frame = NSRect(x: 0, y: b.height - 64, width: 230, height: 64)
         }
         panel.invalidateCursorRects(for: grip)
@@ -222,6 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         if m != .full { defaults.set(m.rawValue, forKey: "mode") }
         web.evaluateJavaScript("window.clawdWidget && window.clawdWidget.setMode('\(m.rawValue)')", completionHandler: nil)
         panel.level = m == .full ? .normal : .floating
+        panel.hasShadow = m != .mini
         panel.setFrame(frame(for: m), display: true, animate: true)
         layoutGrip()
         if m == .full { NSApp.activate(ignoringOtherApps: true) }
@@ -230,12 +295,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         updateMenu()
     }
 
-    private func snapToCorner() {
-        guard mode != .full, let screen = panel.screen?.visibleFrame else { return }
-        let c = NSPoint(x: panel.frame.midX, y: panel.frame.midY)
-        corner = (c.y < screen.midY ? "bottom" : "top") + (c.x < screen.midX ? "Left" : "Right")
+    /// Wherever you drop it, it stays: remember the nearest corner and the distance from it
+    /// (only nudging it back if it hangs off the screen).
+    private func rememberPlace() {
+        guard mode != .full, let scr = panel.screen else { return }
+        let screen = scr.visibleFrame
+        let f = panel.frame
+        corner = (f.midY < screen.midY ? "bottom" : "top") + (f.midX < screen.midX ? "Left" : "Right")
+        offset = NSPoint(x: corner.hasSuffix("Left") ? f.minX - screen.minX : screen.maxX - f.maxX,
+                         y: corner.hasPrefix("bottom") ? f.minY - screen.minY : screen.maxY - f.maxY)
         defaults.set(corner, forKey: "corner")
-        panel.setFrame(frame(for: mode), display: true, animate: true)
+        defaults.set(offset.x, forKey: "offsetX")
+        defaults.set(offset.y, forKey: "offsetY")
+        defaults.set(scr.localizedName, forKey: "screen")
+        let target = frame(for: mode)
+        if target != f { panel.setFrame(target, display: true, animate: true) }
         updateMenu()
     }
 
@@ -245,7 +319,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             defaults.set(panel.frame.width, forKey: "miniWidth")
             defaults.set(panel.frame.height, forKey: "miniHeight")
         }
-        if mode != .full { snapToCorner() }
+        if mode != .full { rememberPlace() }
         layoutGrip()
     }
 
@@ -256,8 +330,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
 
     // MARK: - The page
 
+    private func pinch(_ amount: Double, _ done: Bool) {
+        web.evaluateJavaScript("window.clawdWidget && window.clawdWidget.pinch(\(amount), \(done))", completionHandler: nil)
+    }
+
+    private func smartZoom() {
+        web.evaluateJavaScript("window.clawdWidget && window.clawdWidget.smartZoom()", completionHandler: nil)
+    }
+
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let body = message.body as? [String: Any], body["type"] as? String == "mode", let raw = body["mode"] as? String else { return }
+        guard let body = message.body as? [String: Any] else { return }
+        // The floating corner view is dragged by its label: the page says where that is.
+        if body["type"] as? String == "log", let text = body["text"] as? String { widgetLog("page: \(text)"); return }
+        if body["type"] as? String == "grip", let x = body["x"] as? Double, let y = body["y"] as? Double,
+           let w = body["w"] as? Double, let h = body["h"] as? Double {
+            labelRect = NSRect(x: x, y: y, width: w, height: h)
+            if mode == .mini { layoutGrip() }
+            return
+        }
+        guard body["type"] as? String == "mode", let raw = body["mode"] as? String else { return }
         if raw == "hide" {
             panel.orderOut(nil)
             updateMenu()
@@ -359,6 +450,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private var showItem: NSMenuItem!
     private var sizeItems: [Mode: NSMenuItem] = [:]
     private var cornerItems: [String: NSMenuItem] = [:]
+    private var cornerSizeItems: [String: NSMenuItem] = [:]
 
     private func buildMenu() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -380,7 +472,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             let it = item(title, "") { [weak self] in
                 guard let self else { return }
                 self.corner = id
+                self.offset = NSPoint(x: 16, y: 16) // tucked into that corner
                 self.defaults.set(id, forKey: "corner")
+                self.defaults.set(16.0, forKey: "offsetX")
+                self.defaults.set(16.0, forKey: "offsetY")
                 if self.mode == .full { self.setMode(.mini) } else { self.setMode(self.mode) }
             }
             cornerItems[id] = it
@@ -389,6 +484,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let cornerMenu = NSMenuItem(title: "Corner", action: nil, keyEquivalent: "")
         cornerMenu.submenu = corners
         menu.addItem(cornerMenu)
+        let sizes = NSMenu()
+        for (id, title, size) in AppDelegate.cornerSizes {
+            let it = item(title, "") { [weak self] in
+                guard let self else { return }
+                self.defaults.set(size.width, forKey: "miniWidth")
+                self.defaults.set(size.height, forKey: "miniHeight")
+                self.setMode(.mini)
+            }
+            cornerSizeItems[id] = it
+            sizes.addItem(it)
+        }
+        let sizeMenu = NSMenuItem(title: "Corner size", action: nil, keyEquivalent: "")
+        sizeMenu.submenu = sizes
+        menu.addItem(sizeMenu)
         menu.addItem(item("Reset view", "r") { [weak self] in
             guard let self else { return }
             self.panel.orderFrontRegardless()
@@ -408,6 +517,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         showItem?.title = panel.isVisible ? "Hide Clawd" : "Show Clawd"
         for (m, it) in sizeItems { it.state = m == mode ? .on : .off }
         for (id, it) in cornerItems { it.state = id == corner ? .on : .off }
+        let current = miniSize()
+        for (id, it) in cornerSizeItems { it.state = AppDelegate.cornerSizes.first { $0.id == id }?.size == current ? .on : .off }
     }
 
     private var actions: [MenuAction] = []

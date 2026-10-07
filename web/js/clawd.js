@@ -496,6 +496,12 @@ export class Clawd {
       const beret = add(new THREE.CylinderGeometry(1.75 * U, 1.9 * U, 0.5 * U, 10), toon('#c15f3c'), 0.5 * U, 5.25 * U, 0, 0, -0.18);
       beret.scale.z = 0.9;
       add(B(0.22 * U, 0.35 * U, 0.22 * U), toon('#c15f3c'), 0.35 * U, 5.62 * U, 0);
+    } else if (kind === 'hardhat') {
+      // Background workers: a little hard hat.
+      const gold = toon('#e6b34c');
+      add(B(3.0 * U, 0.85 * U, 2.8 * U), gold, 0, 5.4 * U, 0);
+      add(B(3.9 * U, 0.16 * U, 3.7 * U), gold, 0, 5.05 * U, 0.15 * U);
+      add(B(0.45 * U, 0.3 * U, 2.9 * U), toon('#c8962f'), 0, 5.9 * U, 0);
     } else if (kind === 'gradcap') {
       const slate = toon('#3d3929');
       add(B(2.7 * U, 0.6 * U, 2.5 * U), slate, 0, 5.3 * U, 0);
@@ -820,7 +826,7 @@ export class Clawd {
       ? `<span class="ti brand${brand.mono.length > 2 ? ' tiny' : ''}" style="background:${brand.bg};color:${brand.fg}">${esc(brand.mono)}</span>`
       : `<span class="ti">${icon(iconName)}</span>`;
     this.tagEl.innerHTML = helper
-      ? `<div class="tag helper ${tone}"${style}>${ti}<span><span class="tx">${esc(text)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}</span></div>`
+      ? `<div class="tag helper ${tone}"${style}>${ti}<span><span class="tx">${esc(text)}</span>${sub || timerFrom ? `<span class="sub">${esc(sub)}${timerFrom ? ' · <span class="tm"></span>' : ''}</span>` : ''}</span></div>`
       : `<div class="tag ${tone}">${ti}<span class="tx">${esc(text)}</span><span class="tm"></span></div>`;
     this.timerEl = this.tagEl.querySelector('.tm');
     this.timerText = null;
@@ -1416,6 +1422,29 @@ export class Clawd {
         if (k < 0.45) { j.armLz = -1.5; j.armRz = 1.5; j.lean = -0.18; j.face = 'surprised'; j.hideHand = true; }
         else if (k < 0.6) { j.armLz = -0.5; j.armRz = 0.5; j.armLy = 0.9; j.armRy = -0.9; j.squash = 0.93; j.face = 'happy'; }
         else { j.armLy = 1.25; j.armRy = -1.25; j.armLz = 0.25; j.armRz = -0.25; j.face = 'happy'; }
+        break;
+      }
+      case 'push': {
+        // Shoving furniture out of the way: leaning in, both hands on it, little steps.
+        const s = Math.sin(t * 8);
+        j.lean = 0.34;
+        j.armLy = 1.3; j.armRy = -1.3; j.armLz = 0.2; j.armRz = -0.2;
+        j.legs = [s * 0.5, -s * 0.5, s * 0.5, -s * 0.5];
+        j.squash = 0.97;
+        j.hop = Math.abs(s) * 0.012;
+        j.face = 'focus';
+        j.hideHand = true;
+        break;
+      }
+      case 'pull': {
+        // Dragging something along: leaning back, hands on it, stepping backwards.
+        const s = Math.sin(t * 7);
+        j.lean = -0.22;
+        j.armLy = 1.25; j.armRy = -1.25; j.armLz = 0.1; j.armRz = -0.1;
+        j.legs = [-s * 0.45, s * 0.45, -s * 0.45, s * 0.45];
+        j.squash = 0.98;
+        j.face = 'focus';
+        j.hideHand = true;
         break;
       }
       case 'carry': {

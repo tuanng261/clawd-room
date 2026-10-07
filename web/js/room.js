@@ -7,7 +7,7 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { Clawd, setViewYaw, Sparks, STATION_POSE } from './clawd.js';
 import { cardHtml, PROPS, roleIcon, tipHtml } from './interact.js';
 import { ACTIVITIES, activityFor } from './activities.js';
-import { FEELINGS, feelingFor, helperFeeling, reactionFor } from './feelings.js';
+import { FEELINGS, feelingFor, helperFeeling, reactionFor, workFeeling } from './feelings.js';
 import { MOODS, moodFor, moodOfText } from './thinking.js';
 import { brandFor, buildItem, itemFor } from './items.js';
 import { NavGrid } from './nav.js';
@@ -15,7 +15,7 @@ import * as P from './props.js';
 import * as T from './themes.js';
 import { buildLayout } from './rooms/layouts.js';
 import { asDoing, simplify } from './plain.js';
-import { clock, damp, esc, fmtDur, hash, HAT_COLORS, mascotName, probablyNeedsApproval } from './util.js';
+import { clock, damp, esc, fmtDur, hash, HAT_COLORS, mascotName, probablyNeedsApproval, runningInBackground, stillWorking } from './util.js';
 
 const PAD = 0.42; // keep this far from furniture when walking
 const THINK_BOARD_AFTER = 10000; // thinking longer than this → work it out on the board
@@ -24,6 +24,7 @@ const THOUGHT_SHOW = 9000; // how long a new thought stays in the bubble
 const NAP_AFTER = 90000;
 const RESTING = new Set(['bed', 'stage', 'center', null, undefined]);
 const MAX_HELPERS = 6; // more than this gets crowded: the rest show as "+N" on the door
+const MAX_WORKERS = 4; // background tasks shown as mini Clawds (the rest: "+N more in the background")
 const SAME_TOOL_GAP = 12; // seconds: a burst of the same tool only gets pulled out once
 
 const clipText = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
@@ -31,6 +32,73 @@ const REACT_T = { bounce: 0.6, spin: 1.1, wiggle: 0.9, squish: 0.75 }; // second
 const VISIT_PLAY = 5; // seconds Clawd plays with something you clicked
 const isIdle = (s) => !s || s.status === 'idle' || s.status === 'stale' || !s.live;
 const easeOut = (k) => 1 - Math.pow(1 - k, 3);
+const easeInOut = (k) => (k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2);
+
+// The walkable floor (a grid; the walls are just outside it).
+const FLOOR = { minX: -3.65, maxX: 3.9, minZ: -3.65, maxZ: 3.9, cell: 0.2 };
+// Light things Clawd shoves out of the way when they block the path (it puts them back later).
+const PUSHABLE = new Set(['plant', 'trashCan', 'poufs', 'rollingBoard', 'studentDesk', 'easel', 'micStand', 'softbox', 'ringLight', 'roadCases', 'directorsChair', 'beanbag']);
+const SHOVE_SAVES = 1.8; // shove something only if going around would be at least this much longer
+const TIDY_AFTER = 12000; // ms of nothing to do before Clawd puts moved things back
+
+/**
+ * A piece's footprint on the floor: its own unrotated box, turned with it
+ * (so a whiteboard standing at an angle blocks only where it really is).
+ * cx,cz centre; ux,uz and vx,vz its own x and z axes; hx,hz half sizes.
+ */
+function footprint(g, shrink = 0) {
+  let lb = g.userData.localBox;
+  if (!lb) {
+    const ry = g.rotation.y;
+    g.rotation.y = 0;
+    g.updateMatrixWorld(true);
+    const b = new THREE.Box3().setFromObject(g);
+    g.rotation.y = ry;
+    g.updateMatrixWorld(true);
+    lb = g.userData.localBox = { x0: b.min.x - g.position.x, x1: b.max.x - g.position.x, z0: b.min.z - g.position.z, z1: b.max.z - g.position.z, top: b.max.y, empty: b.isEmpty() };
+  }
+  const c = Math.cos(g.rotation.y);
+  const s = Math.sin(g.rotation.y);
+  const lx = (lb.x0 + lb.x1) / 2;
+  const lz = (lb.z0 + lb.z1) / 2;
+  return {
+    g, top: lb.top, empty: lb.empty,
+    cx: g.position.x + lx * c + lz * s, cz: g.position.z - lx * s + lz * c,
+    ux: c, uz: -s, vx: s, vz: c,
+    hx: Math.max(0.01, (lb.x1 - lb.x0) / 2 - shrink), hz: Math.max(0.01, (lb.z1 - lb.z0) / 2 - shrink),
+  };
+}
+const inFoot = (f, x, z, pad = 0) => {
+  const dx = x - f.cx;
+  const dz = z - f.cz;
+  return Math.abs(dx * f.ux + dz * f.uz) < f.hx + pad && Math.abs(dx * f.vx + dz * f.vz) < f.hz + pad;
+};
+const shifted = (f, dx, dz) => ({ ...f, cx: f.cx + dx, cz: f.cz + dz });
+/** Do two footprints overlap (or come closer than `gap`)? Separating axes, for turned rectangles. */
+function overlap(a, b, gap = 0) {
+  const dx = b.cx - a.cx;
+  const dz = b.cz - a.cz;
+  for (const [ax, az] of [[a.ux, a.uz], [a.vx, a.vz], [b.ux, b.uz], [b.vx, b.vz]]) {
+    const ra = a.hx * Math.abs(a.ux * ax + a.uz * az) + a.hz * Math.abs(a.vx * ax + a.vz * az);
+    const rb = b.hx * Math.abs(b.ux * ax + b.uz * az) + b.hz * Math.abs(b.vx * ax + b.vz * az);
+    if (Math.abs(dx * ax + dz * az) > ra + rb + gap) return false;
+  }
+  return true;
+}
+/** How far a footprint reaches from its centre in direction d. */
+const reachOf = (f, d) => f.hx * Math.abs(f.ux * d.x + f.uz * d.y) + f.hz * Math.abs(f.vx * d.x + f.vz * d.y);
+const pathLength = (from, pts) => pts.reduce((sum, q, i) => sum + q.distanceTo(i ? pts[i - 1] : from), 0);
+/** Points every `step` along a path that starts at `from`. */
+function dots(from, pts, step = 0.1) {
+  const out = [from.clone()];
+  let a = from;
+  for (const b of pts) {
+    const n = Math.max(1, Math.ceil(a.distanceTo(b) / step));
+    for (let i = 1; i <= n; i++) out.push(a.clone().lerp(b, i / n));
+    a = b;
+  }
+  return out;
+}
 
 // Walls fade to this when the camera is behind them, so you can see inside.
 const GHOST = 0.13;
@@ -46,7 +114,9 @@ export class Room {
     this.group = new THREE.Group();
     world.scene.add(this.group);
     this.pal = P.PALETTES[demo ? 1 : hash(id) % P.PALETTES.length];
-    this.nav = new NavGrid({ minX: -3.65, maxX: 3.9, minZ: -3.65, maxZ: 3.9, cell: 0.2 });
+    this.nav = new NavGrid(FLOOR); // everything solid blocks the way
+    this.navSqueeze = new NavGrid(FLOOR); // light things only block where they really are (brushing past)
+    this.navLoose = new NavGrid(FLOOR); // …or not at all (what Clawd could shove aside)
     this.build();
 
     this.clawd = new Clawd({ id: 'main', skin: agent === 'codex' ? 'codex' : 'clawd' });
@@ -57,6 +127,7 @@ export class Room {
     this.clawd.seat = bed.seat || 0;
     this.clawd.drive = { goal: 'bed', arrivedAt: 0 };
     this.helpers = new Map();
+    this.workers = new Map(); // background tasks: mini Clawds in hard hats
 
     this.highlight = new P.Highlight();
     this.trail = new P.Trail();
@@ -148,13 +219,10 @@ export class Room {
 
     // Walkable floor: everything solid is blocked (plus a margin).
     this.group.updateMatrixWorld(true);
-    const box = new THREE.Box3();
-    for (const g of this.L.solids) {
-      box.setFromObject(g);
-      this.nav.blockRect(box.min.x, box.min.z, box.max.x, box.max.z, PAD);
-    }
-    this.setupWalls(shell);
     this.setupProps();
+    this.markPushables();
+    this.mapFloor();
+    this.setupWalls(shell);
 
     // Boxes for the "working here" brackets.
     this.bounds = {};
@@ -173,9 +241,321 @@ export class Room {
       }
       this.st[key] = { spot: [x, z], face: mid.face };
     }
+    // Spots tucked against (or inside) their furniture get a way in from the open side,
+    // so nobody walks through a desk, a whiteboard or the back of a chair to get there.
+    for (const st of Object.values(this.st)) {
+      if (st.approach && this.nav.walkable(st.approach[0], st.approach[1])) continue;
+      st.approach = this.wayOut(st.spot[0], st.spot[1], st.face) || st.approach;
+    }
     // Spots for helper Clawds beside each station.
     this.slots = {};
     for (const [name, st] of Object.entries(this.st)) this.slots[name] = this.slotsAround(st);
+  }
+
+  /** Block every solid piece on the walking grids, and keep their footprints for line checks. */
+  mapFloor() {
+    this.nav.blocked.fill(0);
+    this.navSqueeze.blocked.fill(0);
+    this.navLoose.blocked.fill(0);
+    this.bodies = [];
+    for (const g of this.L.solids) {
+      const f = footprint(g);
+      if (f.empty) continue;
+      const light = g.userData.prop?.pushable;
+      this.nav.blockFoot(f, PAD);
+      this.navSqueeze.blockFoot(f, light ? 0.14 : PAD);
+      if (!light) this.navLoose.blockFoot(f, PAD);
+      if (f.top > 0.12) this.bodies.push(footprint(g, 0.04));
+    }
+  }
+
+  /** Which pieces Clawd may shove: light ones, unless a fixed spot is drawn right onto them. */
+  markPushables() {
+    for (const p of this.props) {
+      if (!PUSHABLE.has(p.kind) || !this.L.solids.includes(p.group)) continue;
+      const f = footprint(p.group);
+      const pinned = Object.values(this.st).some((st) => !st.rel && inFoot(f, st.spot[0], st.spot[1], 0.35));
+      if (pinned) continue;
+      p.pushable = true;
+      p.home = p.group.position.clone();
+    }
+  }
+
+  /** Can you walk straight from a to b without going through furniture? (The piece you start in, and `ignore`, don't count.) */
+  lineClear(ax, az, bx, bz, ignore = null) {
+    const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 0.05));
+    for (const b of this.bodies) {
+      if (b.g === ignore || inFoot(b, ax, az)) continue;
+      for (let i = 1; i <= n; i++) {
+        if (inFoot(b, ax + ((bx - ax) * i) / n, az + ((bz - az) * i) / n)) return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * From a spot pressed against furniture (sitting in a chair, standing at a desk),
+   * the nearest open floor straight forward, back or sideways, without going
+   * through anything. Null if the spot is already open floor.
+   */
+  wayOut(x, z, face) {
+    if (this.nav.walkable(x, z)) return null;
+    let best = null;
+    for (const turn of [0, Math.PI, Math.PI / 2, -Math.PI / 2]) {
+      const dx = Math.sin(face + turn);
+      const dz = Math.cos(face + turn);
+      for (let d = 0.1; d <= 2.4; d += 0.1) {
+        const px = x + dx * d;
+        const pz = z + dz * d;
+        if (!this.nav.inside(this.nav.col(px), this.nav.row(pz))) break;
+        if (!this.nav.walkable(px, pz)) continue;
+        if ((!best || d < best.d) && this.lineClear(x, z, px, pz)) best = { d, p: [px, pz] };
+        break;
+      }
+    }
+    return best?.p || null;
+  }
+
+  /** The way from where a Clawd is to a spot: out of its seat first, around everything, in from the open side. */
+  route(from, heading, spot, approach = null) {
+    const exit = this.wayOut(from.x, from.y, heading);
+    const start = exit ? new THREE.Vector2(exit[0], exit[1]) : from;
+    const goal = approach || spot;
+    // No way around? Squeeze past the light things (brushing them); walk straight only as a last resort.
+    const path = this.nav.path(start.x, start.y, goal.x, goal.y)
+      || this.navSqueeze.path(start.x, start.y, goal.x, goal.y)
+      || this.navLoose.path(start.x, start.y, goal.x, goal.y) || [];
+    if (exit) path.unshift(start.clone());
+    if (!path.length || path[path.length - 1].distanceTo(goal) > 0.05) path.push(goal.clone());
+    if (approach && approach.distanceTo(spot) > 0.01) path.push(spot.clone());
+    return path;
+  }
+
+  // ── moving things out of the way ─────────────────────────────
+
+  /**
+   * Is something light in the way (the only way through, or a much shorter
+   * one)? Then plan to shove it aside: which piece, where to, and where Clawd
+   * stands to push it. Null if the way is fine as it is (or nothing can be done).
+   */
+  planShove(c, key, spot, approach) {
+    const exit = this.wayOut(c.pos.x, c.pos.y, c.heading);
+    const start = exit ? new THREE.Vector2(exit[0], exit[1]) : c.pos.clone();
+    const goal = approach || spot;
+    const loose = this.navLoose.path(start.x, start.y, goal.x, goal.y);
+    if (!loose) return null;
+    const around = this.nav.path(start.x, start.y, goal.x, goal.y);
+    if (around && pathLength(start, around) - pathLength(start, loose) < SHOVE_SAVES) return null;
+    // The first light piece that short way runs into. Rather not the one we're heading
+    // for (its spot moves with it), unless there's truly no other way.
+    const pts = dots(start, loose);
+    const feet = this.props.filter((q) => q.pushable).map((q) => [q, footprint(q.group)]);
+    for (const spare of around ? [true] : [true, false]) {
+      for (let i = 0; i < pts.length; i++) {
+        const p = feet.find(([q, f]) => (!spare || q.role !== key) && inFoot(f, pts[i].x, pts[i].y, PAD * 0.9))?.[0];
+        if (!p) continue;
+        const along = pts[Math.min(i + 3, pts.length - 1)].clone().sub(pts[Math.max(i - 3, 0)]).normalize();
+        const plan = this.shoveFor(p, along, pts.slice(i), start);
+        if (plan) return { ...plan, exit: exit ? start : null, text: `Moving the ${p.info.name.toLowerCase()} out of the way` };
+        break; // can't move the first thing in the way: no point shoving the next
+      }
+    }
+    return null;
+  }
+
+  /** Where to push piece p so it's out of the way: a little off to the side of where we're walking, if there's room. */
+  shoveFor(p, along, corridor, start) {
+    const f = footprint(p.group);
+    const from = new THREE.Vector2(f.cx, f.cz);
+    for (const turn of [0.7, -0.7, 1.15, -1.15, Math.PI / 2, -Math.PI / 2, 0.35, -0.35]) {
+      const dir = along.clone().rotateAround(new THREE.Vector2(), turn);
+      for (const dist of [0.8, 1.1, 1.4, 1.8]) {
+        const to = from.clone().addScaledVector(dir, dist);
+        if (!this.spotFree(p, to) || !this.slideClear(p, from, to)) continue;
+        const there = shifted(f, to.x - f.cx, to.y - f.cz);
+        if (corridor.some((v) => inFoot(there, v.x, v.y, PAD))) continue;
+        const hold = this.holdFor(p, f, from, dir, dist, start);
+        if (hold) return { p, from, to, dir, dist, ...hold };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Where Clawd takes hold of piece p to move it `dist` along `dir`: behind it
+   * to push, or (if there's no room behind) in front, pulling it along while
+   * stepping backwards. Includes the walk there from `start`.
+   */
+  holdFor(p, f, from, dir, dist, start) {
+    const reach = reachOf(f, dir) + 0.5;
+    for (const pull of [false, true]) {
+      const stand = this.openNear(from.clone().addScaledVector(dir, pull ? reach : -reach));
+      if (!stand) continue;
+      const end = stand.clone().addScaledVector(dir, dist);
+      if (!this.lineClear(stand.x, stand.y, end.x, end.y, p.group)) continue;
+      if (pull && !this.nav.walkable(end.x, end.y)) continue; // backing into open floor
+      const walk = this.nav.path(start.x, start.y, stand.x, stand.y);
+      if (walk) return { stand, pull, walk };
+    }
+    return null;
+  }
+
+  /** That point if it's open floor, else the nearest open floor within a step of it. */
+  openNear(v) {
+    if (this.nav.walkable(v.x, v.y)) return v;
+    const [c, r] = this.nav.nearestFree(v.x, v.y);
+    const q = new THREE.Vector2(this.nav.cx(c), this.nav.cz(r));
+    return q.distanceTo(v) < 0.35 && this.nav.walkable(q.x, q.y) ? q : null;
+  }
+
+  /** Could piece p stand with its middle at `to`: on the floor, clear of other furniture, off everyone's spots? */
+  spotFree(p, to) {
+    const f0 = footprint(p.group);
+    const f = shifted(f0, to.x - f0.cx, to.y - f0.cz);
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        const x = f.cx + sx * f.hx * f.ux + sz * f.hz * f.vx;
+        const z = f.cz + sx * f.hx * f.uz + sz * f.hz * f.vz;
+        if (x < -3.95 || x > 3.95 || z < -3.95 || z > 3.95) return false;
+      }
+    }
+    if (this.bodies.some((b) => b.g !== p.group && overlap(f, b, 0.08))) return false;
+    const near = (pt, r) => pt && inFoot(f, pt[0], pt[1], r);
+    for (const [key, st] of Object.entries(this.st)) {
+      if (key === 'tidy' || key === 'visit' || st.rel?.g === p.group) continue; // its own spots move with it
+      if (near(st.spot, 0.45) || near(st.approach, 0.4)) return false;
+    }
+    return !near(this.L.door.front, 0.6) && !near(this.L.door.inside, 0.6);
+  }
+
+  /** Nothing in the way while the piece slides from `from` to `to`? */
+  slideClear(p, from, to) {
+    const f = footprint(p.group);
+    for (let k = 0.25; k < 1; k += 0.25) {
+      const m = shifted(f, (to.x - from.x) * k, (to.y - from.y) * k);
+      if (this.bodies.some((b) => b.g !== p.group && overlap(m, b))) return false;
+    }
+    return true;
+  }
+
+  /** Walk over to the piece, then push it (the room decides where to go next once it's done). */
+  goShove(c, sh) {
+    c.pushing = { ...sh, phase: 'walk' };
+    const path = [...(sh.exit ? [sh.exit.clone()] : []), ...sh.walk];
+    if (!path.length || path[path.length - 1].distanceTo(sh.stand) > 0.05) path.push(sh.stand.clone());
+    const face = sh.pull ? Math.atan2(-sh.dir.x, -sh.dir.y) : Math.atan2(sh.dir.x, sh.dir.y);
+    c.walk(path, { face, onArrive: () => this.startShove(c, c.pushing) });
+    this.trail.set([c.pos.clone(), ...path]);
+  }
+
+  startShove(c, sh) {
+    if (!sh) return;
+    c.pushing = { ...sh, phase: 'push', t0: this.t, dur: 0.9 + sh.dist * (sh.pull ? 0.8 : 0.6), gFrom: sh.p.group.position.clone(), cFrom: c.pos.clone() };
+    c.face = sh.pull ? Math.atan2(-sh.dir.x, -sh.dir.y) : Math.atan2(sh.dir.x, sh.dir.y);
+    c.setPose(sh.pull ? 'pull' : 'push');
+    this.trail.hide();
+  }
+
+  /** Lean in for a beat, then the piece slides (wobbling, kicking up dust) with Clawd right behind it. */
+  updateShove() {
+    const c = this.clawd;
+    const P = c.pushing;
+    if (P?.phase !== 'push') return;
+    const k = Math.min(1, (this.t - P.t0) / P.dur);
+    const e = k < 0.2 ? 0 : easeInOut((k - 0.2) / 0.8);
+    const g = P.p.group;
+    const dx = P.dir.x * P.dist * e;
+    const dz = P.dir.y * P.dist * e;
+    g.position.set(P.gFrom.x + dx, P.gFrom.y, P.gFrom.z + dz);
+    const sliding = e > 0 && e < 1;
+    g.rotation.z = P.p.base.rotZ + (sliding ? Math.sin(this.t * 24) * 0.03 : 0);
+    c.pos.set(P.cFrom.x + dx, P.cFrom.y + dz);
+    if (sliding && this.t - (P.dustAt || 0) > 0.14) {
+      P.dustAt = this.t;
+      this.fx.emit(P.from.x + dx + (Math.random() - 0.5) * 0.5, 0.05, P.from.y + dz + (Math.random() - 0.5) * 0.5, { n: 2, speed: 0.25, up: 0.15, life: 0.55, mats: ['smoke'], size: 1.5, float: true });
+    }
+    if (k < 1) return;
+    this.finishShove(P);
+    c.pushing = null;
+    c.drive.goal = null; // go on to wherever we were heading
+    c.setPose('idle');
+  }
+
+  /** The piece is in its new place: walls of the walking grid, its spots and its card all follow. */
+  finishShove(P) {
+    const p = P.p;
+    const g = p.group;
+    g.rotation.z = p.base.rotZ;
+    p.base.pos.copy(g.position);
+    g.updateMatrixWorld(true);
+    p.box.setFromObject(g);
+    this.mapFloor();
+    for (const [key, st] of Object.entries(this.st)) {
+      const r = st.rel;
+      if (r?.g === g) {
+        const cs = Math.cos(g.rotation.y);
+        const sn = Math.sin(g.rotation.y);
+        const tx = (x, z) => [g.position.x + x * cs + z * sn, g.position.z - x * sn + z * cs];
+        st.spot = tx(r.lx, r.lz);
+        st.approach = r.approach ? tx(r.approach[0], r.approach[1]) : null;
+        if (!st.approach || !this.nav.walkable(st.approach[0], st.approach[1])) st.approach = this.wayOut(st.spot[0], st.spot[1], st.face);
+        this.slots[key] = this.slotsAround(st);
+      } else if (key.startsWith('at:') && this.props[Number(key.split(':')[1])] === p) {
+        delete this.st[key]; // worked out again next time it's needed
+        delete this.slots[key];
+        delete this.bounds[key];
+      }
+    }
+    if (p.role && this.bounds[p.role]) this.bounds[p.role].setFromObject(g).expandByScalar(0.08);
+    this.highlightKey = '';
+    if (this.chore?.p === p) this.chore = null;
+  }
+
+  /**
+   * With nothing to do, put back whatever got shoved aside, one thing at a
+   * time, as long as it can slide straight home and Clawd can still get to bed.
+   */
+  tidyIntent() {
+    const c = this.clawd;
+    if (c.pushing) return { station: null, pose: c.pose, tag: { text: c.pushing.text, iconName: 'sparkle', tone: 'idle' }, feel: 'content' };
+    if (!this.chore) {
+      for (const p of this.props) {
+        if (!p.pushable || p.group.position.distanceTo(p.home) < 0.2 || (p.noTidyUntil || 0) > this.t) continue;
+        this.chore = this.tidyPlan(p);
+        if (this.chore) break;
+        p.noTidyUntil = this.t + 60; // can't right now: try again in a while
+      }
+    }
+    if (!this.chore) return null;
+    const ch = this.chore;
+    this.st.tidy = { spot: [ch.stand.x, ch.stand.y], face: ch.pull ? Math.atan2(-ch.dir.x, -ch.dir.y) : Math.atan2(ch.dir.x, ch.dir.y) };
+    return { station: 'tidy', pose: 'idle', tag: { text: ch.text, iconName: 'sparkle', tone: 'idle' }, feel: 'content' };
+  }
+
+  tidyPlan(p) {
+    const f = footprint(p.group);
+    const from = new THREE.Vector2(f.cx, f.cz);
+    const to = from.clone().add(new THREE.Vector2(p.home.x - p.group.position.x, p.home.z - p.group.position.z));
+    const dist = from.distanceTo(to);
+    const dir = to.clone().sub(from).normalize();
+    if (!this.spotFree(p, to) || !this.slideClear(p, from, to)) return null;
+    const c = this.clawd;
+    const exit = this.wayOut(c.pos.x, c.pos.y, c.heading);
+    const hold = this.holdFor(p, f, from, dir, dist, exit ? new THREE.Vector2(exit[0], exit[1]) : c.pos.clone());
+    if (!hold) return null;
+    const { stand, pull } = hold;
+    // Put back, would it wall Clawd off from its bed? Then leave it where it is.
+    const tmp = (this.navTmp ||= new NavGrid(FLOOR));
+    tmp.blocked.set(this.navLoose.blocked);
+    for (const q of this.props) {
+      if (!q.pushable) continue;
+      const fq = footprint(q.group);
+      tmp.blockFoot(q === p ? shifted(fq, to.x - from.x, to.y - from.y) : fq, PAD);
+    }
+    const end = stand.clone().addScaledVector(dir, dist);
+    const bed = this.st.bed.approach || this.st.bed.spot;
+    if (!tmp.path(end.x, end.y, bed[0], bed[1])) return null;
+    return { p, from, to, dir, dist, stand, pull, text: `Putting the ${p.info.name.toLowerCase()} back` };
   }
 
   /** Six spots beside a station for helpers who share it. */
@@ -449,7 +829,9 @@ export class Room {
 
   /** Hovering a Clawd: a little tip under it saying how it feels and what it would say. */
   hoverMascot(id) {
-    const c = id === 'main' ? this.clawd : id?.startsWith('agent:') ? [...this.helpers.values()].find((h) => 'agent:' + h.agent?.id === id)?.clawd : null;
+    const c = id === 'main' ? this.clawd
+      : id?.startsWith('agent:') ? [...this.helpers.values()].find((h) => 'agent:' + h.agent?.id === id)?.clawd
+        : id?.startsWith('job:') ? this.workers.get(id.slice(4))?.clawd : null;
     if (c === this.mascotHover) return;
     this.mascotHover = c || null;
     this.feelTipKey = '';
@@ -461,10 +843,20 @@ export class Room {
     if (!c) return;
     if (c.vanishing) { this.hoverMascot(null); return; }
     this.feelTipObj.position.set(c.pos.x, 0.02, c.pos.y);
-    const id = c.feeling;
-    if (id === this.feelTipKey) return;
-    this.feelTipKey = id;
-    const F = FEELINGS[id];
+    const F = FEELINGS[c.feeling];
+    const w = c.id.startsWith('job:') ? this.workers.get(c.id.slice(4)) : null;
+    if (w) {
+      // A background task: what it's doing, in full, and for how long.
+      const job = w.job;
+      const took = job.startedAt ? fmtDur(clock.now() - job.startedAt) : '';
+      const key = `${c.feeling}|${job.about || job.label}|${took}`;
+      if (key === this.feelTipKey) return;
+      this.feelTipKey = key;
+      this.feelTipEl.innerHTML = `<div class="proptip feeltip task"><b>${F ? F.emoji[0] + ' ' : ''}In the background${took ? ' · ' + took : ''}</b><span>${esc(job.about || job.label || 'Background task')}</span></div>`;
+      return;
+    }
+    if (c.feeling === this.feelTipKey) return;
+    this.feelTipKey = c.feeling;
     this.feelTipEl.innerHTML = F ? `<div class="proptip feeltip"><b>${F.emoji[0]} ${esc(F.word)}</b><span>“${esc(F.says)}”</span></div>` : '';
   }
 
@@ -513,6 +905,7 @@ export class Room {
   /** Squash, spin and wiggle the poked furniture, then put it back exactly as it was. */
   updateReacts() {
     for (const [prop, r] of this.reacts) {
+      if (prop === this.clawd?.pushing?.p) continue; // being pushed: leave it to the push
       const g = prop.group;
       const b = prop.base;
       const k = (this.t - r.t0) / REACT_T[r.type];
@@ -678,6 +1071,10 @@ export class Room {
     }
   }
 
+  petWorker(jobId) {
+    this.workers.get(jobId)?.clawd.pet();
+  }
+
   petHelper(agentId) {
     for (const h of this.helpers.values()) if (h.agent?.id === agentId) h.clawd.pet();
   }
@@ -739,9 +1136,9 @@ export class Room {
     return new THREE.Vector3((b.min.x + b.max.x) / 2, y, (b.min.z + b.max.z) / 2);
   }
 
-  /** The item an intent should hold for a plan (connectors keep their own badge). */
-  itemOf(plan, act) {
-    if (!plan.A.item || plan.A.bare?.includes(plan.prop?.kind)) return null;
+  /** The item an intent should hold for a plan (connectors keep their own badge). Mini Clawds can't reach a big rig, so they bring their own. */
+  itemOf(plan, act, mini = false) {
+    if (!plan.A.item || (!mini && plan.A.bare?.includes(plan.prop?.kind))) return null;
     return { kind: plan.A.item, brand: plan.A.item === 'cartridge' ? brandFor(act) : null };
   }
 
@@ -829,6 +1226,14 @@ export class Room {
         return { station: 'stage', pose: 'celebrate', tag: { text: 'Done! Your turn', iconName: 'check', tone: 'waiting' }, bubble: 'ok' };
       }
       const nap = since > NAP_AFTER;
+      const chore = !nap && sinceEnd > TIDY_AFTER ? this.tidyIntent() : null;
+      if (chore) return chore;
+      // Mini Clawds still working in the background: wait up for them (clock out, foot tapping).
+      const busy = runningInBackground(s);
+      if (busy) {
+        const plan = this.planFor({ activity: 'wait', station: 'armchair' });
+        return { station: plan.key, pose: 'wait', item: this.itemOf(plan, {}), tag: { text: stillWorking(busy), iconName: 'terminal', tone: 'idle' }, feel: 'patient' };
+      }
       return {
         station: 'bed', pose: nap ? 'sleep' : 'rest',
         tag: { text: nap ? 'Napping until you need me' : 'Waiting for you', iconName: nap ? 'moon' : 'user', tone: 'idle', timerFrom: nap ? null : s.statusSince },
@@ -883,6 +1288,12 @@ export class Room {
   /** Move a Clawd toward the intent's station (with a little dwell so it doesn't jitter). */
   drive(c, intent, slot) {
     const w = c.drive || (c.drive = { goal: null, arrivedAt: 0 });
+    if (c.pushing) {
+      // Busy moving something out of the way: say so, and finish that first.
+      c.setTag({ text: c.pushing.text, iconName: 'sparkle', tone: 'idle' });
+      c.setBubble(null);
+      return;
+    }
     c.setTag(intent.tag);
     c.equip(intent.item?.kind || null, intent.item?.brand || null);
     c.target = intent.target || null;
@@ -907,17 +1318,23 @@ export class Room {
     if (!st) return;
     const main = slot === 0;
     // Helpers who have a piece to themselves stand right at it; others squeeze in beside.
-    const spot = main || own ? new THREE.Vector2(st.spot[0], st.spot[1]) : this.slots[station][(slot - 1) % 6].clone();
-    const approach = main && st.approach ? new THREE.Vector2(st.approach[0], st.approach[1]) : spot;
-    const path = this.nav.path(c.pos.x, c.pos.y, approach.x, approach.y);
-    if (path.length && path[path.length - 1].distanceTo(approach) > 0.05) path.push(approach.clone());
-    if (approach !== spot) path.push(spot.clone());
+    const atSpot = main || own;
+    const spot = atSpot ? new THREE.Vector2(st.spot[0], st.spot[1]) : this.slots[station][(slot - 1) % 6].clone();
+    const approach = atSpot && st.approach ? new THREE.Vector2(st.approach[0], st.approach[1]) : null;
+    // Clawd shoves light things out of the way rather than walking through them (or way around them).
+    if (main && station !== 'tidy' && (c.shoves || 0) < 3) {
+      const sh = this.planShove(c, station, spot, approach);
+      if (sh) { c.shoves = (c.shoves || 0) + 1; this.goShove(c, sh); return; }
+    }
+    const path = this.route(c.pos, c.heading, spot, approach);
     c.walk(path, {
       face: st.face,
       seat: main ? st.seat || 0 : 0,
       onArrive: () => {
         c.drive.arrivedAt = this.t;
+        c.shoves = 0;
         if (main) this.trail.hide();
+        if (station === 'tidy' && this.chore && main) this.startShove(c, this.chore);
       },
     });
     if (main) this.trail.set([c.pos.clone(), ...path]);
@@ -927,8 +1344,7 @@ export class Room {
     const running = (s?.agents || []).filter((a) => a.status === 'running' || a.status === 'starting');
     const active = running.slice(-MAX_HELPERS);
     const extra = running.length - active.length;
-    const moreText = extra > 0 ? `<div class="tag helper"><span class="tx">+${extra} more helper${extra > 1 ? 's' : ''} working</span></div>` : '';
-    if (moreText !== this.moreHtml) { this.moreHtml = moreText; this.moreEl.innerHTML = moreText; }
+    this.moreHelpers = extra; // shown on the door with any extra background tasks (syncWorkers)
     // A helper is first listed under a temporary id, then its real one; the call that launched it stays the same.
     const keyOf = (a) => a.toolUseId || a.id;
     const keep = new Set(active.map(keyOf));
@@ -956,7 +1372,7 @@ export class Room {
         station = plan.key === 'stage' ? 'portal' : plan.key; // helpers don't take the stage
         const long = plan.A.long && clock.now() - act.startedAt > plan.A.long[0];
         pose = long ? plan.A.long[1] : plan.A.pose;
-        item = long ? null : this.itemOf(plan, act);
+        item = long ? null : this.itemOf(plan, act, true);
         target = this.targetOf(plan);
         sub = asDoing(act.text);
         iconName = act.icon;
@@ -998,6 +1414,121 @@ export class Room {
     }
   }
 
+  // ── background tasks: mini Clawds in hard hats ──────────────
+
+  /**
+   * Each background command Claude has running is a mini Clawd in a hard
+   * hat: it hops out of the terminal, works at the right spot for the job
+   * (getting bored on long ones), and when it's done brings the result to
+   * Clawd and heads out the door.
+   */
+  syncWorkers(s, now) {
+    const running = s?.live ? (s.jobs || []).filter((j) => j.kind === 'shell' && j.status === 'running') : [];
+    const active = running.slice(-MAX_WORKERS);
+    const keep = new Set(active.map((j) => j.id));
+    for (const w of this.workers.values()) {
+      if (!keep.has(w.id) && !w.leaving) this.finishWorker(w, (s?.jobs || []).find((j) => j.id === w.id));
+    }
+    const extra = running.length - active.length;
+    const more = [
+      this.moreHelpers > 0 ? `+${this.moreHelpers} more helper${this.moreHelpers > 1 ? 's' : ''} working` : '',
+      extra > 0 ? `+${extra} more in the background` : '',
+    ].filter(Boolean).map((t) => `<div class="tag helper"><span class="tx">${t}</span></div>`).join('');
+    if (more !== this.moreHtml) { this.moreHtml = more; this.moreEl.innerHTML = more; }
+    // Spots already in use, so everyone spreads out over the room.
+    const taken = new Set([this.intent?.station, ...[...this.helpers.values()].map((h) => h.clawd.drive?.goal)].filter(Boolean));
+    for (const job of active) {
+      const w = this.workers.get(job.id) || this.spawnWorker(job);
+      if (w.leaving) continue;
+      const act = { activity: job.activity, station: job.station || 'terminal', startedAt: job.startedAt || now };
+      const plan = this.planFor(act, true, taken);
+      const own = !taken.has(plan.key);
+      taken.add(plan.key);
+      const long = plan.A.long && now - act.startedAt > plan.A.long[0];
+      w.clawd.setFeeling(workFeeling(act, now, 6)); // background jobs are meant to be long: patient for a few minutes, bored after ~15
+      w.job = job;
+      // Just a short hello when it shows up; hover it to see the whole task.
+      const fresh = this.t - w.bornAt < 4;
+      this.drive(w.clawd, {
+        station: plan.key === 'stage' ? 'portal' : plan.key, own,
+        pose: long ? plan.A.long[1] : plan.A.pose, item: long ? null : this.itemOf(plan, act, true), target: this.targetOf(plan),
+        tag: fresh ? { text: 'Working on a background task', iconName: 'terminal', helper: true, hat: '#e6b34c' } : { text: '' },
+      }, w.slot);
+    }
+  }
+
+  spawnWorker(job) {
+    const used = new Set([...this.helpers.values(), ...this.workers.values()].map((h) => h.slot));
+    let slot = 1;
+    while (used.has(slot)) slot++;
+    const c = new Clawd({ id: 'job:' + job.id, scale: 0.45, speed: 2.2, skin: this.agent === 'codex' ? 'codex' : 'clawd' });
+    c.wear('hardhat');
+    c.onAction = (pose, who) => this.clawdAction(who, pose);
+    // Background work starts at the terminal: that's where it hops out.
+    const st = this.st.terminal;
+    const [x, z] = st.approach || st.spot;
+    c.place(x, z, st.face + Math.PI);
+    c.drive = { goal: null, arrivedAt: 0 };
+    this.group.add(c.root);
+    c.hop();
+    this.fx.emit(x, 0.5, z, { n: 10, speed: 0.6, up: 0.9, life: 0.55, mats: ['green', 'white', 'gold'] });
+    const w = { id: job.id, clawd: c, slot, leaving: false, job, bornAt: this.t };
+    this.workers.set(job.id, w);
+    return w;
+  }
+
+  /** Done: cheer, bring the result over to Clawd, out the door. Failed: droop and go. Unknown: just go. */
+  finishWorker(w, job) {
+    w.leaving = true;
+    const c = w.clawd;
+    const ok = job?.status === 'done' || job?.status === 'completed';
+    const failed = ['failed', 'error', 'killed'].includes(job?.status);
+    c.setTag(ok || failed ? { text: ok ? 'Done!' : 'It didn’t work', iconName: ok ? 'check' : 'alert', helper: true, hat: '#e6b34c' } : { text: '' });
+    c.setBubble(ok ? 'ok' : failed ? 'err' : null);
+    c.setPose(ok ? 'celebrate' : 'idle');
+    if (ok || failed) { c.react(ok ? 'proud' : 'deflated', 2.5); c.hop(); }
+    const leave = () => {
+      if (this.disposed) return;
+      c.equip(null);
+      c.setBubble(null);
+      const [fx, fz] = this.L.door.front;
+      const [ix, iz] = this.L.door.inside;
+      const path = this.route(c.pos, c.heading, new THREE.Vector2(fx, fz));
+      path.push(new THREE.Vector2(ix, iz));
+      c.walk(path, {
+        face: -Math.PI / 2,
+        onArrive: () => {
+          this.doorOpenUntil = this.t + 1.4;
+          c.vanish(() => { c.dispose(); this.workers.delete(w.id); });
+        },
+      });
+    };
+    setTimeout(() => {
+      if (this.disposed) return;
+      if (!ok) { leave(); return; }
+      // Bring the result to Clawd, wherever it is (each worker to its own side of it).
+      const m = this.clawd.pos;
+      let spot = null;
+      for (let k = 0; k < 8 && !spot; k++) {
+        const a = w.slot * 1.9 + (k / 8) * Math.PI * 2;
+        const x = m.x + Math.sin(a) * 0.95;
+        const z = m.y + Math.cos(a) * 0.95;
+        if (this.nav.walkable(x, z)) spot = new THREE.Vector2(x, z);
+      }
+      if (!spot) { leave(); return; }
+      c.setTag({ text: 'Bringing the result', iconName: 'check', helper: true, hat: '#e6b34c' });
+      c.equip('envelope');
+      c.walk(this.route(c.pos, c.heading, spot), {
+        face: Math.atan2(m.x - spot.x, m.y - spot.y),
+        onArrive: () => {
+          c.setPose('present');
+          this.clawd.glance(c.pos.x, c.pos.y, 2);
+          setTimeout(leave, 1700);
+        },
+      });
+    }, ok || failed ? 1500 : 400);
+  }
+
   spawn(a, key) {
     const used = new Set([...this.helpers.values()].map((h) => h.slot));
     let slot = 1;
@@ -1029,7 +1560,7 @@ export class Room {
       c.setBubble(null);
       const [fx, fz] = this.L.door.front;
       const [ix, iz] = this.L.door.inside;
-      const path = this.nav.path(c.pos.x, c.pos.y, fx, fz);
+      const path = this.route(c.pos, c.heading, new THREE.Vector2(fx, fz));
       path.push(new THREE.Vector2(ix, iz));
       c.walk(path, {
         face: -Math.PI / 2,
@@ -1067,10 +1598,13 @@ export class Room {
       this.lastFloatAt = t;
     }
     this.drive(this.clawd, intent, 0);
-    this.clawd.setFeeling(intent.feel || feelingFor(s, now));
+    this.updateShove();
+    this.clawd.setFeeling(this.clawd.pushing?.phase === 'push' && !this.chore ? 'determined' : intent.feel || feelingFor(s, now));
     this.syncHelpers(s);
+    this.syncWorkers(s, now);
     this.clawd.update(dt, t);
     for (const h of this.helpers.values()) h.clawd.update(dt, t);
+    for (const w of this.workers.values()) w.clawd.update(dt, t);
     this.trail.update(dt, t, this.clawd.walked);
     this.updateWalls(dt);
     this.updateReacts();
@@ -1090,6 +1624,7 @@ export class Room {
   }
 
   tickLabels(now) {
+    for (const w of this.workers.values()) w.clawd.tickTimer(now, fmtDur);
     this.clawd.tickTimer(now, fmtDur);
   }
 
@@ -1101,7 +1636,7 @@ export class Room {
     // Which stations someone (Clawd or a helper) is working at right now.
     const busy = new Set();
     if (at && intent.station === at) busy.add(at);
-    for (const h of this.helpers.values()) if (!h.leaving && !h.clawd.walking && h.clawd.drive?.goal) busy.add(h.clawd.drive.goal);
+    for (const h of [...this.helpers.values(), ...this.workers.values()]) if (!h.leaving && !h.clawd.walking && h.clawd.drive?.goal) busy.add(h.clawd.drive.goal);
 
     // Brackets around the station Clawd is working at.
     const hl = at && intent.station === at && this.bounds[at] ? at : '';
@@ -1247,6 +1782,8 @@ export class Room {
     this.cardEl.remove();
     this.clawd.dispose();
     for (const h of this.helpers.values()) h.clawd.dispose();
+    for (const w of this.workers.values()) w.clawd.dispose();
+    this.disposed = true;
     this.group.removeFromParent();
   }
 }

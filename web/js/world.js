@@ -9,6 +9,7 @@ import { PixelPass } from './pixelpass.js';
 import { clamp, easeInOutCubic } from './util.js';
 
 const VIEW_DIR = new THREE.Vector3(1, 1.12, 1).normalize(); // a slightly-high isometric look
+const PIXEL_BUDGET = 8.3e6; // render pixels per frame we're happy to draw (about a 4K screen)
 // The room's real outline: the floor slab's corners and the tops of the two
 // walls (the front two sides are open, so no wall tops there).
 const ROOM_CENTER = new THREE.Vector3(-0.05, 1.1, -0.05);
@@ -19,9 +20,9 @@ ROOM_POINTS.push(new THREE.Vector3(-4.35, 3.1, -4.35), new THREE.Vector3(4.25, 3
 export class World {
   constructor(el) {
     this.el = el;
-    // Drawn at the screen's full resolution (Retina too); the pixel pass adds the outlines.
+    // Drawn at twice the CSS size (see pixelRatioFor), so edges stay clean even on non-Retina screens.
     const r = (this.renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, premultipliedAlpha: false, powerPreference: 'high-performance' }));
-    r.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    r.setPixelRatio(2);
     r.setClearColor(0x000000, 0);
     r.shadowMap.enabled = true;
     r.shadowMap.type = THREE.BasicShadowMap;
@@ -53,7 +54,7 @@ export class World {
     const c = (this.controls = new OrbitControls(this.camera, r.domElement));
     c.enableDamping = true;
     c.dampingFactor = 0.08;
-    c.minDistance = 6;
+    c.minDistance = 3; // close enough that Clawd fills the view
     c.maxDistance = 150; // far enough that framing a small or narrow view never gets clamped
     c.minPolarAngle = 0.25;
     c.maxPolarAngle = 1.3;
@@ -64,36 +65,31 @@ export class World {
       this.flight = null;
       this.userMoved = true;
     });
+    // Zooming (not turning) is what changes how zoomed in you are; until it settles, nothing re-frames over it.
+    r.domElement.addEventListener('wheel', () => { this.zoomPending = true; }, { passive: true });
     // Tell whoever cares where the zoom ended up (the wheel's zoom lands on the next frame, hence the wait).
-    // A turned camera needs the room framed again for its new angle.
     c.addEventListener('end', () => {
       clearTimeout(this.zoomTimer);
-      this.zoomTimer = setTimeout(() => {
-        const A = this.autoFrame;
-        // How zoomed in you chose to be: only your zooms change it, never resizes.
-        if (A?.base) A.ratio = this.camera.position.distanceTo(c.target) / A.base.distance;
-        if (A) A.base = null;
-        this.onZoom?.(this.camera.position.distanceTo(c.target));
-      }, 250);
+      this.zoomTimer = setTimeout(() => this.zoomEnded(), 250);
     });
     // Trackpad pinch: Chrome sends it as ctrl+wheel (OrbitControls handles that), but Safari and
     // the Mac widget (WebKit) send gesture events instead, so zoom on those ourselves.
     let pinchFrom = 0;
     const pinch = (e) => {
       e.preventDefault();
+      if (this.nativePinch) return; // the Mac app passes pinches on itself (pinchBy); two sources would fight
       if (e.type === 'gesturestart') {
         pinchFrom = this.camera.position.distanceTo(c.target);
         this.flight = null;
         this.userMoved = true;
+        this.zoomPending = true;
       } else if (e.type === 'gesturechange' && pinchFrom) {
         const d = THREE.MathUtils.clamp(pinchFrom / Math.max(0.05, e.scale), c.minDistance, c.maxDistance);
         const dir = this.camera.position.clone().sub(c.target).normalize();
         this.camera.position.copy(c.target).addScaledVector(dir, d);
       } else if (e.type === 'gestureend') {
         pinchFrom = 0;
-        const A = this.autoFrame;
-        if (A?.base) A.ratio = this.camera.position.distanceTo(c.target) / A.base.distance;
-        this.onZoom?.(this.camera.position.distanceTo(c.target));
+        this.zoomEnded();
       }
     };
     for (const type of ['gesturestart', 'gesturechange', 'gestureend']) r.domElement.addEventListener(type, pinch);
@@ -109,18 +105,13 @@ export class World {
     this.inset = { left: 0, right: 0, top: 0, bottom: 0 };
     this.follow = null;
     this.flight = null;
+    this.maxRatio = 1.6; // how far past "the whole room" you can zoom out (the corner view: not at all)
     this.paused = false; // widget pill: no 3D at all
     this.maxFps = 0; // widget corner: 30 is plenty and kinder to the battery
     this.frameAcc = 0;
 
     new ResizeObserver(() => this.resize()).observe(el);
     this.resize();
-    // Moving the window to another screen (or zooming the page) changes the pixel density.
-    const watchDensity = () => matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener('change', () => {
-      this.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      watchDensity();
-    }, { once: true });
-    watchDensity();
     this.fit(0);
     r.setAnimationLoop((ts) => this.frame(ts));
   }
@@ -130,21 +121,47 @@ export class World {
     return { w: Math.max(1, this.el.clientWidth || window.innerWidth), h: Math.max(1, this.el.clientHeight || window.innerHeight) };
   }
 
+  /**
+   * Render pixels per CSS pixel: 2, on any screen. On a Retina screen that's
+   * its own resolution; on a regular one the room is drawn twice as big and
+   * smoothed down, which keeps edges clean. Very big views get less, so a
+   * frame never costs more than PIXEL_BUDGET.
+   */
+  pixelRatioFor(w, h) {
+    return Math.max(1, Math.min(2, Math.sqrt(PIXEL_BUDGET / Math.max(1, w * h))));
+  }
+
   resize() {
     const { w, h } = this.viewSize();
+    const ratio = this.pixelRatioFor(w, h);
+    if (Math.abs(this.renderer.getPixelRatio() - ratio) > 0.01) {
+      this.renderer.setPixelRatio(ratio);
+      this.composer?.setPixelRatio(ratio); // the composer keeps its own copy
+      if (this.pixelPass) this.pixelPass.edgeWidth = this.outlineWidth();
+    }
     this.renderer.setSize(w, h);
     this.composer?.setSize(w, h);
     this.labels.setSize(w, h);
     this.camera.aspect = w / h;
     this.applyInset();
-    if (this.autoFrame) this.autoFrame.base = null; // re-frame for the new size
+    this.reframe(); // for the new size
+  }
+
+  /** Work out the framing again (next frame), keeping a zoom you're in the middle of. */
+  reframe() {
+    const A = this.autoFrame;
+    if (!A) return;
+    if (this.zoomPending && A.base && !this.flight) A.ratio = Math.min(this.maxRatio, this.camera.position.distanceTo(this.controls.target) / A.base.distance);
+    A.base = null;
   }
 
   /** Panels cover the edges of the screen; shift the view so the room sits in the free middle. */
   setInset(inset) {
     const prev = this.insetTarget;
+    // Called on every update: if nothing moved, leave the framing (and your zoom) alone.
+    if (prev && ['left', 'right', 'top', 'bottom'].every((k) => Math.abs(prev[k] - inset[k]) < 0.5)) return;
     this.insetTarget = inset;
-    if (this.autoFrame) this.autoFrame.base = null; // the free area changed: frame the room again
+    this.reframe(); // the free area changed: frame the room again
     if (!prev) {
       this.inset = { ...inset };
       this.applyInset();
@@ -155,7 +172,7 @@ export class World {
 
   /** Re-frame the room after a resize, unless the user has moved the camera themselves. */
   refitIfIdle() {
-    if (this.autoFrame) this.autoFrame.base = null; // auto-framing follows the new size by itself
+    if (this.autoFrame) this.reframe(); // auto-framing follows the new size by itself
     else if (!this.userMoved && !this.follow) this.fit(0.4);
   }
 
@@ -222,7 +239,7 @@ export class World {
     this.userMoved = false;
     const { target, distance } = this.frameRoom(VIEW_DIR);
     if (this.autoFrame) {
-      this.autoFrame.base = { target: target.clone(), distance };
+      this.autoFrame.base = { target: target.clone(), distance, dir: VIEW_DIR.clone() };
       this.autoFrame.ratio = 1;
     }
     this.flyTo(target, distance, duration, VIEW_DIR);
@@ -235,7 +252,7 @@ export class World {
    * are (1 = the whole room just fits).
    */
   setAutoFrame(subject, ratio = 1) {
-    this.autoFrame = subject ? { subject, base: null, ratio } : null;
+    this.autoFrame = subject ? { subject, base: null, ratio: Math.min(ratio, this.maxRatio) } : null;
     this.controls.enablePan = !subject;
     if (subject) {
       this.follow = null;
@@ -247,7 +264,7 @@ export class World {
     const A = this.autoFrame;
     if (!A) return;
     const dir = this.camera.position.clone().sub(this.controls.target).normalize();
-    A.base = this.frameRoom(dir); // the zoom you chose (A.ratio) carries over to the new size
+    A.base = { ...this.frameRoom(dir), dir }; // the zoom you chose (A.ratio) carries over to the new size
     const d = clamp(A.ratio * A.base.distance, this.controls.minDistance, this.controls.maxDistance);
     if (snap) {
       this.flight = null;
@@ -274,11 +291,37 @@ export class World {
     this.flyTo(this.frameGoal(), clamp(ratio * A.base.distance, this.controls.minDistance, this.controls.maxDistance), duration, dir);
   }
 
+  /** A trackpad pinch passed on by the Mac app: `amount` is how much the fingers spread (+) or closed (−). */
+  pinchBy(amount, done = false) {
+    const c = this.controls;
+    if (amount) {
+      this.flight = null;
+      this.userMoved = true;
+      this.zoomPending = true;
+      const dir = this.camera.position.clone().sub(c.target).normalize();
+      const d = clamp(this.camera.position.distanceTo(c.target) / (1 + amount), c.minDistance, c.maxDistance);
+      this.camera.position.copy(c.target).addScaledVector(dir, d);
+    }
+    if (done) this.zoomEnded();
+  }
+
+  /** A zoom (wheel or pinch) settled: remember how zoomed in you are. Past the limit, the camera glides back. */
+  zoomEnded() {
+    const A = this.autoFrame;
+    const d = this.camera.position.distanceTo(this.controls.target);
+    if (this.zoomPending && A?.base) A.ratio = Math.min(this.maxRatio, d / A.base.distance);
+    this.zoomPending = false;
+    this.onZoom?.(d);
+  }
+
   zoom(factor) {
     const c = this.controls;
     const off = this.camera.position.clone().sub(c.target);
-    const d = clamp(off.length() * factor, c.minDistance, c.maxDistance);
-    if (this.autoFrame?.base) this.autoFrame.ratio = d / this.autoFrame.base.distance;
+    let d = clamp(off.length() * factor, c.minDistance, c.maxDistance);
+    if (this.autoFrame?.base) {
+      d = Math.min(d, this.autoFrame.base.distance * this.maxRatio);
+      this.autoFrame.ratio = d / this.autoFrame.base.distance;
+    }
     this.flyTo(c.target.clone(), d, 0.45, off.normalize());
   }
 
@@ -320,14 +363,6 @@ export class World {
       this.advance(dt);
     }
     this.draw();
-  }
-
-  /** Draw at a pixel density (the screen's own, or less to save work). */
-  setPixelRatio(ratio) {
-    if (Math.abs(this.renderer.getPixelRatio() - ratio) < 0.01) return;
-    this.renderer.setPixelRatio(ratio);
-    this.pixelPass.edgeWidth = this.outlineWidth();
-    this.resize();
   }
 
   /** Step the world by hand: browsers pause animation frames while a tab is hidden. */
@@ -379,10 +414,19 @@ export class World {
       this.camera.position.add(delta);
     } else if (this.autoFrame) {
       const A = this.autoFrame;
-      if (!A.base) this.refreshFrame(false);
-      const delta = this.frameGoal().sub(this.controls.target).multiplyScalar(1 - Math.exp(-4 * dt));
-      this.controls.target.add(delta);
+      const c = this.controls;
+      const dir = this.camera.position.clone().sub(c.target).normalize();
+      // Turned (or still gliding after a turn), resized, new panels: frame the room for how it's seen now.
+      if (!A.base?.dir || dir.dot(A.base.dir) < 0.9998) A.base = { ...this.frameRoom(dir), dir };
+      const delta = this.frameGoal().sub(c.target).multiplyScalar(1 - Math.exp(-4 * dt));
+      c.target.add(delta);
       this.camera.position.add(delta);
+      // Glide to where the whole room fits (times your zoom), so it's never cut off; not while you're zooming.
+      if (!this.zoomPending) {
+        const want = clamp(A.ratio * A.base.distance, c.minDistance, c.maxDistance);
+        const d = this.camera.position.distanceTo(c.target);
+        if (Math.abs(want - d) > 0.001) this.camera.position.copy(c.target).addScaledVector(dir, d + (want - d) * (1 - Math.exp(-6 * dt)));
+      }
     }
     this.controls.update(dt);
   }

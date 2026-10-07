@@ -2,7 +2,9 @@
 // (the Mac app in widget/ wraps it). Three sizes:
 //
 //   pill  one line: Clawd's face, what it's doing, a timer. No 3D at all.
-//   mini  just the room, following Clawd, with a caption bar under it.
+//   mini  just the room, floating on the desktop, with a small label under it
+//         (its buttons are on the label, and you drag the label to move it;
+//         dragging the room spins it, like everywhere else).
 //   full  the whole app.
 //
 // In the Mac app the buttons ask the window to change size (it answers by
@@ -14,7 +16,7 @@ import { icon } from './icons.js';
 import { brandFor } from './items.js';
 import { asDoing, simplify } from './plain.js';
 import { MOODS, moodFor } from './thinking.js';
-import { clock, esc, fmtAgo, fmtDur, probablyNeedsApproval } from './util.js';
+import { clock, esc, fmtAgo, fmtDur, probablyNeedsApproval, runningInBackground, stillWorking } from './util.js';
 
 const params = new URLSearchParams(location.search);
 export const WIDGET = params.has('widget');
@@ -49,10 +51,12 @@ function glanceText(s, now) {
   const tasks = s.tasks || [];
   const done = tasks.filter((t) => t.status === 'completed').length;
   const helpers = (s.agents || []).filter((a) => a.status === 'running' || a.status === 'starting').length;
+  const background = runningInBackground(s);
   const sub = [
     s.project + (s.demo ? ' · demo' : ''),
     tasks.length ? `${done} of ${tasks.length} tasks` : '',
     helpers ? `${helpers} helper${helpers > 1 ? 's' : ''}` : '',
+    background ? `${background} in the background` : '',
   ].filter(Boolean).join(' · ');
   const progress = tasks.length ? done / tasks.length : null;
   if (s.status === 'stale' || (!s.live && s.status !== 'idle')) return { tone: 'stale', head: 'This session went quiet', sub, since: null, mark: icon('moon'), progress };
@@ -65,6 +69,10 @@ function glanceText(s, now) {
   }
   if (s.status === 'thinking') return { tone: 'thinking', head: MOODS[moodFor(s, now)].tag, sub, since: s.statusSince, mark: icon('dots'), progress };
   const fresh = s.turn?.endedAt && now - s.turn.endedAt < 9000 && !s.turn.interrupted;
+  if (background && !fresh) {
+    const rest = [s.project + (s.demo ? ' · demo' : ''), tasks.length ? `${done} of ${tasks.length} tasks` : '', 'your turn'].filter(Boolean).join(' · ');
+    return { tone: 'working', head: stillWorking(background), sub: rest, since: null, mark: icon('terminal'), progress };
+  }
   return {
     tone: 'idle', head: fresh ? 'Done! Your turn' : 'Your turn',
     sub: s.turn?.endedAt ? `${sub} · finished ${fmtAgo(now - s.turn.endedAt)}` : sub,
@@ -73,9 +81,13 @@ function glanceText(s, now) {
 }
 
 export class Widget {
-  constructor({ onMode, onReset }) {
+  constructor({ onMode, onReset, onPinch, onSmartZoom }) {
     this.onMode = onMode;
     this.onReset = onReset;
+    this.onPinch = onPinch;
+    this.onSmartZoom = onSmartZoom;
+    // If WebKit ever hands the page a pinch itself, note it in the app's log (helps tell where pinches go).
+    document.addEventListener('gesturestart', () => nativeApp()?.postMessage({ type: 'log', text: 'the page got a pinch (gesturestart)' }), { capture: true });
     this.snap = null;
     this.el = document.createElement('div');
     this.el.className = 'wdg';
@@ -86,13 +98,14 @@ export class Widget {
         <button data-w="pill" title="Shrink to a pill">${SVG.pill}</button>
         <button data-w="hide" title="Hide (bring it back from the menu bar)">${SVG.hide}</button>
       </div>
-      <div class="wdg-cap"></div>
+      <div class="wdg-cap"><div class="wcb"></div></div>
       <div class="wdg-pill" title="Click to open the corner view"></div>
       <div class="wdg-emo" aria-hidden="true"></div>`;
     document.body.appendChild(this.el);
     document.body.classList.add('widget');
     if (nativeApp()) document.body.classList.add('in-app');
     this.ctl = this.el.querySelector('.wdg-ctl');
+    this.cap = this.el.querySelector('.wdg-cap');
     this.emoEl = this.el.querySelector('.wdg-emo');
     this.feel = undefined;
     this.emoAt = 0;
@@ -108,7 +121,14 @@ export class Widget {
     });
     // The Mac app calls this when the window changes size (and once it has loaded).
     const self = this;
-    window.clawdWidget = { setMode: (m) => self.apply(m), reset: () => self.onReset?.(), get mode() { return self.mode; } };
+    window.clawdWidget = {
+      setMode: (m) => self.apply(m),
+      reset: () => self.onReset?.(),
+      pinch: (amount, done) => self.onPinch?.(amount, done), // trackpad pinch, from the Mac app
+      smartZoom: () => self.onSmartZoom?.(), // two-finger double tap
+      get mode() { return self.mode; },
+    };
+    window.addEventListener('resize', () => this.reportGrip());
     this.apply(params.get('mode') || 'mini');
     setInterval(() => this.tick(), 500);
   }
@@ -126,8 +146,10 @@ export class Widget {
     document.body.dataset.mode = mode;
     // In the full view the buttons sit in the top bar; otherwise in the widget itself.
     const bar = document.querySelector('.top-right');
+    // The buttons sit in the top bar in the full view, on the label in the corner view.
     if (mode === 'full' && bar) bar.prepend(this.ctl);
-    else this.el.insertBefore(this.ctl, this.el.querySelector('.wdg-cap'));
+    else if (mode === 'mini') this.cap.append(this.ctl);
+    else this.el.insertBefore(this.ctl, this.cap);
     for (const b of this.ctl.querySelectorAll('[data-w]')) b.hidden = b.dataset.w === mode || (b.dataset.w === 'hide' && !nativeApp());
     this.onMode?.(mode);
     this.render();
@@ -143,10 +165,25 @@ export class Widget {
     const time = g.since ? `<span class="wt" data-since="${g.since}">${fmtDur(clock.now() - g.since)}</span>` : '';
     const html = `<span class="wm">${g.mark}</span><span class="wx"><b>${esc(g.head)}</b>${g.sub ? `<small>${esc(g.sub)}</small>` : ''}</span>${time}`;
     const bar = g.progress != null ? `<i class="wbar"><b style="width:${Math.round(g.progress * 100)}%"></b></i>` : '';
-    this.put('.wdg-cap', `${html}${bar}`, `wdg-cap ${g.tone}`);
+    this.put('.wdg-cap .wcb', `${html}${bar}`, 'wcb');
+    if (this.cap.className !== `wdg-cap ${g.tone}`) this.cap.className = `wdg-cap ${g.tone}`;
     this.put('.wdg-pill', `<span class="wface ${g.tone} f-${PILL_FACE[g.feel] || 'plain'}"><i></i><i></i></span>${html}`, `wdg-pill ${g.tone}`);
     document.body.dataset.tone = g.tone;
     this.feelPop(g.feel);
+    this.reportGrip();
+  }
+
+  /** Tell the Mac app where the label is (minus its buttons): that's what you drag the floating room by. */
+  reportGrip() {
+    const app = nativeApp();
+    if (!app || this.mode !== 'mini') return;
+    const r = this.cap.getBoundingClientRect();
+    const right = Math.min(r.right, this.ctl.getBoundingClientRect().left - 2);
+    const box = { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(Math.max(0, right - r.left)), h: Math.round(r.height) };
+    const key = JSON.stringify(box);
+    if (key === this.gripKey) return;
+    this.gripKey = key;
+    app.postMessage({ type: 'grip', ...box });
   }
 
   /** A new strong feeling pops its emoji over the pill's face (now and then, like Clawd's own). */

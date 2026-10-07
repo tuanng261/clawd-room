@@ -64,13 +64,14 @@ function frameCamera() {
   hud.setFollow(false);
   world.setAutoFrame(subject, savedZoom());
 }
-const widget = WIDGET ? new Widget({ onMode: widgetMode, onReset: () => resetView() }) : null;
+const widget = WIDGET ? new Widget({ onMode: widgetMode, onReset: () => resetView(), onPinch: (amount, done) => world.pinchBy(amount, done), onSmartZoom: () => closeUp() }) : null;
+world.nativePinch = document.body.classList.contains('in-app'); // the Mac app hands pinches over itself
 
 function widgetMode(mode) {
   world.paused = mode === 'pill';
   world.maxFps = mode === 'mini' ? 30 : 0;
-  world.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // the corner canvas is tiny, so keep it sharp
-  world.controls.minDistance = mode === 'mini' ? 3 : 6; // let the corner view get right up to Clawd
+  world.controls.minDistance = mode === 'mini' ? 2 : 3; // zoom right up to Clawd
+  world.maxRatio = mode === 'mini' ? 1 : 1.6; // the floating corner room never shrinks inside its window
   if (room) room.cards = mode === 'full';
   hud.layout();
   if (mode !== 'pill') frameCamera(); // each size keeps its own zoom
@@ -258,9 +259,10 @@ const canvas = world.renderer.domElement;
 let down = null;
 let moveAt = null;
 let moveFrame = 0;
-canvas.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; });
+// Measured on screen, so dragging the floating widget around never counts as a click.
+canvas.addEventListener('pointerdown', (e) => { down = [e.screenX, e.screenY]; });
 canvas.addEventListener('pointerup', (e) => {
-  if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 5) return;
+  if (!down || Math.hypot(e.screenX - down[0], e.screenY - down[1]) > 5) return;
   const id = world.pick(e.clientX, e.clientY);
   if (id === 'main') {
     hud.setFocus('main');
@@ -268,6 +270,8 @@ canvas.addEventListener('pointerup', (e) => {
   } else if (id?.startsWith('agent:')) {
     hud.setFocus(id.slice(6));
     room?.petHelper(id.slice(6));
+  } else if (id?.startsWith('job:')) {
+    room?.petWorker(id.slice(4));
   } else {
     const prop = room?.propAt(e.clientX, e.clientY);
     if (prop) room.poke(prop);
@@ -289,13 +293,14 @@ canvas.addEventListener('pointermove', (e) => {
   });
 });
 canvas.addEventListener('pointerleave', () => { moveAt = null; room?.hover(null); room?.hoverMascot(null); canvas.style.cursor = ''; });
-// Double-click the room: close-up on Clawd, or back to the whole room.
-canvas.addEventListener('dblclick', () => {
+// Double-click the room (or double-tap with two fingers): close-up on Clawd, or back to the whole room.
+function closeUp() {
   if (following || !world.autoFrame?.base) return;
   const close = world.autoFrame.ratio > 0.6;
-  world.zoomToRatio(close ? 0.42 : 1);
-  store.set(zoomKey(), close ? '0.42' : '1');
-});
+  world.zoomToRatio(close ? 0.3 : 1);
+  store.set(zoomKey(), close ? '0.3' : '1');
+}
+canvas.addEventListener('dblclick', closeUp);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') room?.closeCard(); });
 
 setInterval(() => room?.tickLabels(clock.now()), 250);

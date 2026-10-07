@@ -110,3 +110,8 @@ export function probablyNeedsApproval(act, session, now) {
 /** Who's in the room: Codex sessions get their own mascot and name (body[data-agent], set per session). */
 export const isCodex = () => typeof document !== 'undefined' && document.body?.dataset.agent === 'codex';
 export const mascotName = () => (isCodex() ? 'Codex' : 'Clawd');
+
+/** How many background commands are still running (each one is a mini Clawd in the room). */
+export const runningInBackground = (s) => (s?.live ? (s.jobs || []).filter((j) => j.kind === 'shell' && j.status === 'running').length : 0);
+/** "A mini Clawd is still working" / "3 mini Clawds are still working". */
+export const stillWorking = (n) => (n === 1 ? `A mini ${mascotName()} is still working` : `${n} mini ${mascotName()}s are still working`);

@@ -32,6 +32,20 @@ export class NavGrid {
     }
   }
 
+  /**
+   * Block a turned rectangle (a piece's real footprint): centre cx,cz, its own
+   * x axis (ux,uz) and z axis (vx,vz) on the floor, half sizes hx,hz.
+   */
+  blockFoot(f, pad = 0) {
+    for (let r = 0; r < this.rows; r++) {
+      const dz = this.cz(r) - f.cz;
+      for (let c = 0; c < this.cols; c++) {
+        const dx = this.cx(c) - f.cx;
+        if (Math.abs(dx * f.ux + dz * f.uz) < f.hx + pad && Math.abs(dx * f.vx + dz * f.vz) < f.hz + pad) this.blocked[this.idx(c, r)] = 1;
+      }
+    }
+  }
+
   blockCircle(x0, z0, radius, pad = 0) {
     const rr = (radius + pad) ** 2;
     for (let r = 0; r < this.rows; r++) {
@@ -74,7 +88,7 @@ export class NavGrid {
     return true;
   }
 
-  /** Returns smoothed waypoints (Vector2 x,z) from a to b, excluding the start. */
+  /** Returns smoothed waypoints (Vector2 x,z) from a to b, excluding the start; null if there's no way through. */
   path(ax, az, bx, bz) {
     const [sc, sr] = this.nearestFree(ax, az);
     const [gc, gr] = this.nearestFree(bx, bz);
@@ -117,13 +131,10 @@ export class NavGrid {
         }
       }
     }
+    if (!found) return null;
     const cells = [];
-    if (found) {
-      for (let cur = goal; cur !== -1; cur = came[cur]) cells.push(cur);
-      cells.reverse();
-    } else {
-      cells.push(goal);
-    }
+    for (let cur = goal; cur !== -1; cur = came[cur]) cells.push(cur);
+    cells.reverse();
     const pts = cells.map((i) => new THREE.Vector2(this.cx(i % this.cols), this.cz((i / this.cols) | 0)));
     pts[0] = new THREE.Vector2(ax, az);
     // String-pulling: drop waypoints we can see past.

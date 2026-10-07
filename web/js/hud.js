@@ -10,7 +10,7 @@ import { brandFor } from './items.js';
 import { asDoing, chatBubbles, simplify } from './plain.js';
 import { MOODS, moodFor } from './thinking.js';
 import {
-  clock, esc, fmtAgo, fmtDur, fmtTokens, hash, HAT_COLORS, mascotName, probablyNeedsApproval, STATION_COLORS, STATION_LEGEND, STATION_NAMES,
+  clock, esc, fmtAgo, fmtDur, fmtTokens, hash, HAT_COLORS, mascotName, probablyNeedsApproval, runningInBackground, STATION_COLORS, STATION_LEGEND, STATION_NAMES, stillWorking,
 } from './util.js';
 import { dotClass } from './room.js';
 
@@ -331,6 +331,8 @@ export class Hud {
       ic = 'user';
       head = s.turn?.interrupted ? 'Stopped. Your turn' : 'Done. Your turn';
       sub = s.turn?.endedAt ? `finished <span data-ago="${s.turn.endedAt}">${fmtAgo(now - s.turn.endedAt)}</span> · took ${fmtDur(s.turn.endedAt - s.turn.startedAt)}` : 'waiting for you';
+      const busy = runningInBackground(s);
+      if (busy) sub = `${esc(stillWorking(busy))} in the background · ${sub}`;
     }
     const thought = s.thought && (!s.turn || s.thought.at >= s.turn.startedAt) ? s.thought : null;
     const mind = thought ? `<div class="mind short"><span class="mi">${icon('thought')}</span><p>${esc(simplify(thought.text, 12))}</p></div>` : '';
@@ -570,9 +572,9 @@ export class Hud {
   }
 
   insets() {
-    // Widget mode: no panels around the room, only the caption bar in the corner view.
+    // Widget mode: no panels around the room, only the little label under it in the corner view.
     const mode = document.body.dataset.mode;
-    if (mode === 'mini') return { left: 0, right: 0, top: 0, bottom: 46 };
+    if (mode === 'mini') return { left: 0, right: 0, top: 0, bottom: 50 };
     if (mode === 'pill') return { left: 0, right: 0, top: 0, bottom: 0 };
     const narrow = window.innerWidth <= 860;
     const side = $('side').getBoundingClientRect();

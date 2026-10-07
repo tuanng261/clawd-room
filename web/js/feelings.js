@@ -18,7 +18,7 @@
 
 import { activityFor } from './activities.js';
 import { moodFor, moodOfText } from './thinking.js';
-import { probablyNeedsApproval } from './util.js';
+import { probablyNeedsApproval, runningInBackground } from './util.js';
 
 export const FEELINGS = {
   // ── starting and exploring ──
@@ -202,14 +202,14 @@ export function stuckness(steps, now) {
   return failsBefore(list, i) + 1;
 }
 
-/** What doing this step feels like, and how that changes the longer it takes. */
-export function workFeeling(act, now) {
+/** What doing this step feels like, and how that changes the longer it takes (`patience` stretches that). */
+export function workFeeling(act, now, patience = 1) {
   const id = activityFor(act);
   let f = WORK[id] || 'focused';
   if (id === 'code' && act.delta?.whole) f = 'inspired'; // a brand-new file
   else if (id === 'code' && (act.delta?.add || 0) + (act.delta?.del || 0) >= 80) f = 'determined'; // a big change
   if (WAITING.has(id) && !act.background) {
-    const took = now - act.startedAt;
+    const took = (now - act.startedAt) / patience;
     const nerves = f === 'nervous' ? 45000 : 0; // nerves hold out a little longer
     if (took > 150000 + nerves) f = 'bored';
     else if (took > 45000 + nerves) f = 'impatient';
@@ -236,6 +236,7 @@ export function feelingFor(s, now) {
     const resting = now - (s.statusSince || now);
     if (turn?.interrupted && since < 20000) return 'sheepish';
     if (since < 9000) return steps.some((e) => e.status === 'error' && !refused(e)) ? 'relieved' : 'proud';
+    if (runningInBackground(s)) return 'patient'; // mini Clawds still at it
     return resting > 90000 ? 'sleepy' : 'content';
   }
   const act = s.pending?.length ? s.pending[s.pending.length - 1] : null;

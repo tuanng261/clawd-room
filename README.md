@@ -94,6 +94,10 @@ Clawd does the same kinds of work in every room (edit, run, read, search, browse
 | right after its memory is tidied up | dazed 😵‍💫 |
 | being petted | loved 🥰 |
 
+**Background tasks:** every command Claude leaves running in the background gets its own mini Clawd in a hard hat. It hops out of the terminal, works at the right spot for the job (the render tower for a render, the test bench for tests, the camera rig by the green screen for a capture) with a label saying what it is and how long it's been going, and gets bored and yawny on the long ones. When the task finishes it cheers, carries the result over to Clawd and heads out the door; a failed one droops and leaves. Up to four at a time; the rest show as "+N more in the background" over the door. When Claude is done but mini Clawds are still at it, Clawd doesn't say "Waiting for you" or nap: it waits up for them ("2 mini Clawds are still working"), and the corner widget says the same.
+
+**Getting around:** Clawd never walks through furniture or walls. It gets into chairs and up to desks from the open side, and leaves the way it came. If something light is in the way (the rolling whiteboard, a student desk, a light stand, a plant), it shoves it aside, or pulls it along walking backwards when there's no room behind it. Once it's done working, it puts things back where they were.
+
 **Every step looks different:** each step is sorted into one of about 50 activities from what it actually does (the shell command, the file type, the app a connector drives), and each activity has its own spot in the room, its own animation and the thing Clawd holds. A few of them:
 
 | Claude is… | Clawd… |

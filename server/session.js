@@ -10,6 +10,7 @@ const LOG_MAX = 120;
 const LIVE_WINDOW = 3 * 60e3;        // any record in the last 3 min → live
 const BUSY_WINDOW = 20 * 60e3;       // mid-turn sessions stay live this long without records
 const AGENT_STALE = 15 * 60e3;       // a helper silent this long is presumed gone
+const JOB_WINDOW = 2 * 60 * 60e3;    // a background command keeps its session live this long (it writes nothing while it runs)
 const RECENT_AGENT = 30 * 60e3;      // finished helpers stay listed this long
 
 const ts = (rec) => {
@@ -427,6 +428,7 @@ export class SessionModel {
       this.jobs.set(tur.backgroundTaskId, {
         id: tur.backgroundTaskId, kind: 'shell', label: act?.label || 'Background command', detail: act?.detail || null,
         startedAt: t, endedAt: null, status: 'running', toolUseId: id, agentId: agent?.id || null,
+        activity: act?.activity || null, station: act?.station || null, about: act?.about || null,
       });
       if (!agent) this.pushLog({ at: t, kind: 'job', icon: 'terminal', text: `In the background: ${act?.label || 'a command'}` });
     }
@@ -572,6 +574,10 @@ export class SessionModel {
     for (const ag of this.agents.values()) {
       if ((ag.status === 'running' || ag.status === 'starting') && now - (ag.worker.lastAt || ag.startedAt || 0) < AGENT_STALE) return true;
     }
+    // Claude is done, but a background command (a long render…) is still going: that's not "gone quiet".
+    for (const j of this.jobs.values()) {
+      if (j.status === 'running' && now - (j.startedAt || 0) < JOB_WINDOW) return true;
+    }
     return false;
   }
 
@@ -614,7 +620,8 @@ export class SessionModel {
       .sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0))
       .slice(-16);
     const jobs = [...this.jobs.values()]
-      .map((j) => ({ ...j, status: j.status === 'running' && !s.live ? 'unknown' : j.status }))
+      // Still "running" in a quiet session, or for hours with no word: most likely gone (Claude Code restarted…).
+      .map((j) => ({ ...j, status: j.status === 'running' && (!s.live || now - (j.startedAt || 0) > JOB_WINDOW) ? 'unknown' : j.status }))
       .filter((j) => j.status === 'running' || now - (j.endedAt || j.startedAt || 0) < RECENT_AGENT * 4)
       .slice(-16);
     return {
