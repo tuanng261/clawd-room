@@ -36,7 +36,7 @@ npm run widget     # builds "Clawd Widget.app" into build/ and opens it
 Clawd's room in a small window that floats in a corner of your screen, above your other windows and on every Space, without stealing focus. It starts the room's server by itself if it isn't running. Three sizes:
 
 - **Pill**: Clawd's face, one line about what it's doing, a timer. Turns blue and bounces when Claude needs you. Click it to open the corner view.
-- **Corner view**: just the room, following Clawd, with a caption bar (what it's doing, the tool, the plan's progress). Scroll or pinch to zoom (it remembers your zoom), drag to look around, and double-click to switch between following Clawd and the whole room.
+- **Corner view**: just the room with a caption bar (what it's doing, the tool, the plan's progress). The room stays centred and fills the window however you size it. Scroll or pinch to zoom (zooming in slides the view toward Clawd, and it remembers your zoom), drag to look around, double-click for a close-up of Clawd or back to the whole room.
 - **Full view**: the whole app, in a normal window.
 
 Drag the top edge (or the pill) anywhere and it snaps to the nearest corner. Resize the corner view from its edges; it remembers the size. The menu bar icon shows, hides and resizes it, picks the corner, and opens the full room in your browser. Needs the Xcode command line tools (`xcode-select --install`). Server output goes to `~/Library/Logs/ClawdWidget.log`.
@@ -74,6 +74,25 @@ Claude Code writes every session to `~/.claude/projects/<project>/<session>.json
 Clawd does the same kinds of work in every room (edit, run, read, search, browse, plan, tinker, call helpers), only the furniture it does it at changes. Drag to look around: when you swing the camera behind a wall, that wall (and whatever hangs on it) fades to glass so you can still see inside. The room switches only when another kind of work clearly takes over. Use the **Room** button at the top to pick a style yourself (remembered per session).
 
 **Thinking:** what Claude is thinking about decides how Clawd thinks. Right after you send a message it reads your letter; after a failed step it goes back to where it broke and hunts the bug with a magnifier; when the thought weighs options its arms tip like a scale; numbers get a calculator, plans the whiteboard, video a director's frame, design a sketchpad, wording a pencil-to-chin routine, memories a hand to the temple, and "not sure" sends it pacing. With no thought summary to go on, it thinks the way that kind of session usually does. The label says which ("Hunting the bug…", "Weighing the options…"), the short thought pops up in a bubble, and long thoughts end up in the armchair.
+
+**Feelings:** Clawd feels its way through the work. Running the tests is nerve-racking (worried brows, a wobbly mouth, a sweat drop, a little trembling); a failed run lets it down (a frown, a tear); a second failure makes it cross (angry brows, a 💢, steam, stomping); and when the fix finally lands it cheers with its arms up. Its face shows it (brows and a mouth appear only when there's something to show), so does how it moves (bouncy when excited, slow when tired), and now and then an emoji pops up beside it. Hover Clawd to see how it feels and what it would say. Helpers and the Codex mascot have feelings too, and in the pill the little face shows them.
+
+| When Clawd is… | it feels… |
+| --- | --- |
+| starting on your message | eager 👀 |
+| reading, searching, browsing | curious 🧐 |
+| editing code | focused 🎯, and happy 🎶 when everything keeps working |
+| writing a new file, styling, designing | inspired ✨ |
+| running the tests, deploying | nervous 😬 |
+| deleting things, stopping processes | careful 😅 |
+| waiting on a long command | patient, then impatient ⏳, then bored 🥱 |
+| failing once / twice / three times | startled 😳 (let down 😞 if it's the tests) / frustrated 😤 / worn out 😩 |
+| getting it to work after that | relieved 😮‍💨 / triumphant 🎉 |
+| committing, pushing, finishing | proud 😎, excited 🚀 |
+| asking you something, waiting for your OK | hopeful 🥺 |
+| stopped by you, or told no | sheepish 😅 |
+| right after its memory is tidied up | dazed 😵‍💫 |
+| being petted | loved 🥰 |
 
 **Every step looks different:** each step is sorted into one of about 50 activities from what it actually does (the shell command, the file type, the app a connector drives), and each activity has its own spot in the room, its own animation and the thing Clawd holds. A few of them:
 
@@ -129,6 +148,7 @@ Every room finds its own place for each activity (no green screen in the classro
 - `web/js/clawd.js`: the mascot, its poses and faces, pulling out tools, sparkles and floating numbers
 - `web/js/activities.js`: the playbook: where and how each kind of step is acted out
 - `web/js/thinking.js`: thinking moods: what each looks like and where it happens
+- `web/js/feelings.js`: how Clawd feels: what each kind of step feels like, the faces, body language and emoji
 - `web/js/items.js`: the items Clawd pulls out and holds (hammer, scissors, mic, camera…)
 - `web/js/brands.js`: the connector badges (used by the server too)
 - `web/js/plain.js`: turns long technical text into short sentences, and builds the chat bubbles

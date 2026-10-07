@@ -30,6 +30,7 @@
   --text: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --pixel: "Silkscreen", ui-monospace, monospace;
   --num: "VT323", ui-monospace, "SF Mono", Menlo, monospace;
+  --emoji: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --inspector-w: 340px;
   --bottom-h: 0px;
@@ -60,7 +61,7 @@ button { font: inherit; color: inherit; }
 svg { display: block; }
 
 #stage { position: fixed; inset: 0; z-index: 1; }
-#stage canvas { display: block; outline: none; touch-action: none; image-rendering: pixelated; }
+#stage canvas { display: block; outline: none; touch-action: none; }
 #stage .labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 
 /* ── cards ──────────────────────────────────────────────── */
@@ -583,6 +584,36 @@ b.del { color: var(--error); font-weight: 400; }
 .floaty.note { background: none; border: 0; box-shadow: none; color: var(--sky); font: 400 22px/1 var(--text); text-shadow: 2px 2px 0 rgba(61, 57, 41, 0.18); }
 .floaty.love { background: none; border: 0; box-shadow: none; color: #d4537e; font: 400 24px/1 var(--text); text-shadow: 2px 2px 0 rgba(61, 57, 41, 0.18); }
 
+/* How Clawd feels (feelings.js): an emoji pops up beside it now and then, and hovering it says why. */
+.emo-anchor { position: relative; width: 0; height: 0; pointer-events: none; }
+.emopop {
+  position: absolute; right: 6px; bottom: -4px;
+  width: 38px; height: 34px; display: grid; place-items: center;
+  background: #fff; border: 2px solid var(--border);
+  box-shadow: 2px 2px 0 rgba(61, 57, 41, 0.2);
+  font: 400 21px/1 var(--emoji);
+  transform-origin: 100% 100%;
+  animation: emopop 2.4s ease-out both;
+}
+.emopop::before, .emopop::after { content: ""; position: absolute; background: #fff; border: 2px solid var(--border); }
+.emopop::before { width: 8px; height: 8px; right: -6px; bottom: -11px; }
+.emopop::after { width: 4px; height: 4px; right: -13px; bottom: -17px; }
+.emopop.small { right: 4px; bottom: -8px; width: 30px; height: 27px; font-size: 16px; }
+@keyframes emopop {
+  0% { opacity: 0; transform: translate(8px, 6px) scale(0.3); }
+  10% { opacity: 1; transform: translate(0, 0) scale(1.15); }
+  18% { transform: scale(0.96); }
+  24% { transform: scale(1); }
+  80% { opacity: 1; transform: translateY(-3px); }
+  100% { opacity: 0; transform: translateY(-14px) scale(0.92); }
+}
+.proptip.feeltip { transform: translateY(26px); }
+.proptip.feeltip b { font: 400 10px var(--pixel); }
+@media (prefers-reduced-motion: reduce) {
+  .emopop { animation: emofade 2.4s linear both; }
+  @keyframes emofade { 0%, 100% { opacity: 0; } 8%, 80% { opacity: 1; } }
+}
+
 /* ── widget mode (?widget): pill / corner / full ───────── */
 .wdg { display: none; }
 body.widget .wdg { display: block; }
@@ -663,6 +694,22 @@ body.in-app[data-mode="pill"] .wdg-pill { padding-right: 44px; }
 .wface.idle i, .wface.stale i { top: 12px; height: 3px; animation: none; }
 .wface.asking { background: var(--sky); animation: wbounce 0.9s ease-in-out infinite; }
 .wface.asking::before, .wface.asking::after { background: var(--sky); }
+/* The pill's face shows the feeling too (widget.js PILL_FACE). */
+.wface.f-happy i { top: 8px; width: 9px; height: 7px; background: none; border: 3px solid var(--slate); border-bottom: 0; animation: none; }
+.wface.f-happy i:first-child { left: 7px; }
+.wface.f-happy i:last-child { right: 7px; }
+.wface.f-worry i, .wface.f-cross i { animation: none; }
+.wface.f-worry i:first-child { transform: rotate(-22deg); }
+.wface.f-worry i:last-child { transform: rotate(22deg); }
+.wface.f-cross i:first-child { transform: rotate(24deg); }
+.wface.f-cross i:last-child { transform: rotate(-24deg); }
+.wface.f-wide i { top: 5px; width: 6px; height: 13px; }
+.wface.f-squint i { top: 9px; height: 6px; }
+.wface.f-sleepy i { top: 12px; height: 3px; animation: none; }
+.wdg-emo { display: none; }
+body.widget[data-mode="pill"] .wdg-emo { display: block; position: fixed; left: 42px; top: 0; z-index: 22; pointer-events: none; }
+.wdg-emo b { display: block; font: 400 17px/1 var(--emoji); animation: wemo 2.4s ease-out both; }
+@keyframes wemo { 0% { opacity: 0; transform: translateY(8px) scale(0.4); } 14% { opacity: 1; transform: translateY(-2px) scale(1.15); } 24% { transform: none; } 80% { opacity: 1; } 100% { opacity: 0; transform: translateY(-6px); } }
 @keyframes wblink { 0%, 93% { transform: scaleY(1); } 95% { transform: scaleY(0.15); } 97%, 100% { transform: scaleY(1); } }
 @keyframes wbob { 50% { transform: translateY(-2px); } }
 @keyframes wbounce { 0%, 100% { transform: translateY(0); } 40% { transform: translateY(-5px); } 60% { transform: translateY(0); } }

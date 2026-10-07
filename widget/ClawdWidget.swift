@@ -28,6 +28,12 @@ final class Panel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
+/// The widget is rarely the focused window, so take the very first click
+/// (otherwise that click only focuses the window and the button under it does nothing).
+final class WebView: WKWebView {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 /// A strip you grab to move the window. Clicks and double-clicks are passed on.
 final class Grip: NSView {
     var onClick: (() -> Void)?
@@ -153,7 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let setup = WKWebViewConfiguration()
         setup.userContentController.add(self, name: "clawd")
         let bounds = NSRect(origin: .zero, size: rect.size)
-        web = WKWebView(frame: bounds, configuration: setup)
+        web = WebView(frame: bounds, configuration: setup)
         web.autoresizingMask = [.width, .height]
         web.navigationDelegate = self
         web.setValue(false, forKey: "drawsBackground")
@@ -383,6 +389,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let cornerMenu = NSMenuItem(title: "Corner", action: nil, keyEquivalent: "")
         cornerMenu.submenu = corners
         menu.addItem(cornerMenu)
+        menu.addItem(item("Reset view", "r") { [weak self] in
+            guard let self else { return }
+            self.panel.orderFrontRegardless()
+            self.web.evaluateJavaScript("window.clawdWidget && window.clawdWidget.reset()", completionHandler: nil)
+        })
         menu.addItem(item("Open in browser", "o") { [weak self] in
             guard let self, let url = URL(string: self.base) else { return }
             NSWorkspace.shared.open(url)

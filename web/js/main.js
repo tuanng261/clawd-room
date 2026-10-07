@@ -30,21 +30,41 @@ const hud = new Hud({
 });
 
 // Widget mode (?widget): pill / corner / full, inside the Mac app or a tab.
-const FOLLOW_CLOSE = 9.5; // camera distance when the corner view follows Clawd (until you zoom)
-const followClawd = (v) => room.clawdWorld(v).setY(0.85); // aim a little high so thought bubbles fit
-// The corner view keeps the zoom you leave it at (wheel, or pinch on a trackpad).
-const miniZoom = () => Number(store.get('clawd.miniZoom')) || FOLLOW_CLOSE;
-world.onZoom = (d) => {
-  if (widget?.mode === 'mini' && following) store.set('clawd.miniZoom', d.toFixed(2));
+// The camera keeps the whole room centred and filling the view however the
+// window is sized; zooming in (wheel, pinch, double-click) drifts toward Clawd.
+// Each view remembers how zoomed in you left it.
+const zoomKey = () => `clawd.zoom.${document.body.dataset.mode === 'mini' ? 'mini' : 'full'}`;
+// Zooms saved by an earlier version could be stuck far too close: start those fresh, once.
+if (store.get('clawd.zoom.v') !== '2') {
+  for (const k of ['clawd.zoom.mini', 'clawd.zoom.full', 'clawd.miniZoom']) { try { localStorage.removeItem(k); } catch { /* private mode */ } }
+  store.set('clawd.zoom.v', '2');
+}
+/** Back to the whole room, centred, in every view (the menu bar's "Reset view"). */
+function resetView() {
+  for (const k of ['clawd.zoom.mini', 'clawd.zoom.full']) store.set(k, '1');
+  following = false;
+  hud.setFollow(false);
+  if (!world.autoFrame) world.setAutoFrame(subject, 1);
+  world.fit(0.6);
+}
+const savedZoom = () => Number(store.get(zoomKey())) || 1;
+const subject = (v) => (room ? room.clawdWorld(v).setY(0.85) : v.set(0, 1, 0)); // a little high so thought bubbles fit
+world.onZoom = () => {
+  if (world.autoFrame && !following) store.set(zoomKey(), world.autoFrame.ratio.toFixed(3));
 };
+world.setAutoFrame(subject, savedZoom());
 
-/** Point the camera at Clawd: in the corner view at your zoom, otherwise at the usual distance. */
+/** The follow button: stick to Clawd; turning it off goes back to the framed room. */
 function followCamera() {
   if (!room) return;
-  if (widget?.mode === 'mini') world.setFollow(followClawd, miniZoom());
-  else world.setFollow((v) => room.clawdWorld(v));
+  world.setFollow((v) => room.clawdWorld(v));
 }
-const widget = WIDGET ? new Widget({ onMode: widgetMode }) : null;
+function frameCamera() {
+  following = false;
+  hud.setFollow(false);
+  world.setAutoFrame(subject, savedZoom());
+}
+const widget = WIDGET ? new Widget({ onMode: widgetMode, onReset: () => resetView() }) : null;
 
 function widgetMode(mode) {
   world.paused = mode === 'pill';
@@ -53,12 +73,7 @@ function widgetMode(mode) {
   world.controls.minDistance = mode === 'mini' ? 3 : 6; // let the corner view get right up to Clawd
   if (room) room.cards = mode === 'full';
   hud.layout();
-  // The corner view follows Clawd up close (the room isn't there yet on the first call).
-  following = mode === 'mini';
-  hud.setFollow(following);
-  if (!room) return;
-  if (following) followCamera();
-  else if (mode === 'full') world.fit();
+  if (mode !== 'pill') frameCamera(); // each size keeps its own zoom
 }
 
 // ── which room style to show ──────────────────────────────────
@@ -156,7 +171,7 @@ function select(id, byUser = false) {
     }).catch(() => {});
   }
   if (following) followCamera();
-  else world.fit(0.9);
+  else frameCamera();
 }
 
 function autoPick() {
@@ -222,17 +237,18 @@ function connect() {
 // ── camera + clicking on Clawds ───────────────────────────────
 
 function camera(cmd) {
-  if (cmd === 'in') world.zoom(0.78);
-  else if (cmd === 'out') world.zoom(1.28);
-  else if (cmd === 'fit') {
-    following = false;
-    hud.setFollow(false);
+  if (cmd === 'in' || cmd === 'out') {
+    world.zoom(cmd === 'in' ? 0.78 : 1.28);
+    setTimeout(() => world.onZoom(), 700);
+  } else if (cmd === 'fit') {
+    store.set(zoomKey(), '1');
+    frameCamera();
     world.fit();
   } else if (cmd === 'follow') {
     following = !following;
     hud.setFollow(following);
-    if (following && room) followCamera();
-    else world.fit();
+    if (following) followCamera();
+    else frameCamera();
   }
 }
 
@@ -268,16 +284,17 @@ canvas.addEventListener('pointermove', (e) => {
     const who = world.pick(moveAt[0], moveAt[1]);
     const prop = who ? null : room.propAt(moveAt[0], moveAt[1]);
     room.hover(prop);
+    room.hoverMascot(who);
     canvas.style.cursor = who || prop ? 'pointer' : '';
   });
 });
-canvas.addEventListener('pointerleave', () => { moveAt = null; room?.hover(null); canvas.style.cursor = ''; });
-// In the widget's corner view, double-click switches between following Clawd and the whole room.
+canvas.addEventListener('pointerleave', () => { moveAt = null; room?.hover(null); room?.hoverMascot(null); canvas.style.cursor = ''; });
+// Double-click the room: close-up on Clawd, or back to the whole room.
 canvas.addEventListener('dblclick', () => {
-  if (widget?.mode !== 'mini' || !room) return;
-  following = !following;
-  if (following) followCamera();
-  else world.fit();
+  if (following || !world.autoFrame?.base) return;
+  const close = world.autoFrame.ratio > 0.6;
+  world.zoomToRatio(close ? 0.42 : 1);
+  store.set(zoomKey(), close ? '0.42' : '1');
 });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') room?.closeCard(); });
 

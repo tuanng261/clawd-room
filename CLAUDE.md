@@ -29,6 +29,11 @@ reloads (quit and reopen it from its menu bar icon).
   the place, the animation, or what Clawd holds.
 - **Thinking looks like what it's about.** Hunting a bug, weighing options,
   storyboarding, crunching numbers: each has its own words, pose and place.
+- **Clawd has feelings.** What a step feels like (tests are nerve-racking, a
+  stubborn bug is maddening, a fix after three tries is the best) shows on
+  its face (brows and a mouth only appear when there's something to show), in
+  how it moves, and in an emoji that pops up now and then. Keep the emoji
+  occasional: one at a time, strong feelings always, calm ones only sometimes.
 - **Plain words first, details one click away.** Labels, bubbles and chat say
   short, plain sentences ("Running the unit tests"). Commands, file paths and
   full thinking live under "Technical details".
@@ -38,8 +43,9 @@ reloads (quit and reopen it from its menu bar icon).
   details" (commands, full thinking, lists). Don't add stat cards, clocks or
   pop-ups that repeat them; pop-ups are only for "Claude needs you" and other
   sessions finishing.
-- **Look:** crisp, blocky toon shading with outlines (not smooth, not heavy
-  pixels; pixel size 1 by default), all in the Claude palette (ivory/cream,
+- **Look:** crisp, blocky toon shading with outlines (not smooth, not
+  pixelated: drawn at the screen's full resolution, Retina included, with
+  outlines about one CSS pixel thick), all in the Claude palette (ivory/cream,
   clay orange, kraft, olive, dusty blue, slate). New items and furniture are
   built from boxes in those colours (see `items.js`, `rooms/pieces.js`).
 - **Cute and alive, never noisy.** One pull-out per burst of the same tool,
@@ -88,6 +94,7 @@ transcript line ──► server/watcher.js (tail) ──► server/session.js (
                                         working:  planFor(act) ── activities.js ──► spot + pose + item + throws
                                         thinking: thinkIntent() ── thinking.js ──► mood: words + pose + place
                                         idle:     bed / celebrate / visits after you poke furniture
+                                        feeling:  feelingFor(s) + reactionFor(step) ── feelings.js ──► face + body + emoji
                                       web/js/clawd.js  poses, held items, beats (effects), pull-outs
                                       web/js/hud.js    panel, chat, progress (plain words via plain.js)
 ```
@@ -136,7 +143,12 @@ When someone's sessions are about something the room doesn't act out well yet
 9. **Thinking:** add or tune a mood in `web/js/thinking.js` (keywords score
    hits; most hits wins) and its pose in `clawd.js`. Moods can go somewhere
    (`at: '@whiteboard'`, `'failure'`, `'pace'`) or happen in place.
-10. **Show it in the demo** (`server/demo.js`) so the looping demo exercises it,
+10. **Feelings:** say what the new activity feels like in `WORK`
+    (`web/js/feelings.js`), and if finishing it is a moment (a deploy landing),
+    add it to `reactionFor`. Add a feeling only if none fits: a `face` (eyes,
+    brows, mouth, extras), a `body` (bounce, tremble, slump, tempo…), the
+    emoji and a short first-person `says` line for the hover tip.
+11. **Show it in the demo** (`server/demo.js`) so the looping demo exercises it,
     and add a line to the tables in `README.md`.
 
 ### Make sure actions don't overlap
@@ -162,6 +174,12 @@ Helpers call `planFor(act, true, taken)` and prefer pieces nobody uses; spare
 furniture (no station role) beats someone's busy station.
 
 ## The widget
+
+Framing: `World.setAutoFrame()` keeps the room's real outline (floor slab +
+the two walls) centred and filling the free part of the screen, re-framing on
+every resize; zooming in (`ratio` < 1) slides the aim toward Clawd. Don't put
+the camera on a fixed target, and keep `ROOM_POINTS` in `world.js` in sync if
+the room's size changes.
 
 Three sizes, all from the same page: **pill** (no 3D at all: `world.paused`),
 **mini** (room only, camera follows Clawd, 30 fps, caption bar replaces
@@ -189,6 +207,11 @@ The pane is often hidden, which pauses animation frames. So:
   with a style tag and override `hud.insets()`.
 - CSS animations don't run while hidden: pause them at a frame
   (`animation-play-state: paused; animation-delay: -0.5s`) to see them.
+- Feelings: give the intent a `feel` (`room.decideMain = () => ({ …, feel:
+  'nervous' })`) or call `room.clawd.react('triumphant', 3)`. To compare faces,
+  put a row of `new Clawd()`s in front of the camera, each with
+  `setFeeling(name)`, and pause `.emopop` at a frame (CSS doesn't run while
+  hidden).
 - Clean up afterwards: remove `clawd.session` and `clawd.style.*` from
   `localStorage` and reload, so the page goes back to auto-picking.
 
@@ -203,6 +226,7 @@ The pane is often hidden, which pauses animation frames. So:
 | `server/demo.js` | the looping demo (one story per room type) |
 | `web/js/activities.js` | **the playbook**: where and how each activity is acted out |
 | `web/js/thinking.js` | thinking moods: words, pose, place |
+| `web/js/feelings.js` | how Clawd feels: what each step feels like, reactions, faces, body language, emoji |
 | `web/js/room.js` | decisions, spots, helpers, throws, furniture pokes, faded walls |
 | `web/js/clawd.js` | the mascot: poses, faces, held items, beats, pull-outs, floats |
 | `web/js/items.js` | props Clawd holds or throws (and how it holds them) |

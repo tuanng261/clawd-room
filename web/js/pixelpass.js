@@ -1,15 +1,17 @@
-// Low-resolution render with crisp pixel outlines, based on three.js's
+// Toon outlines from depth and normals, based on three.js's
 // RenderPixelatedPass. Changes: see-through effects (shadows, trails, glass)
-// are left out of the edge pass so they don't get outlined, and the
-// background stays transparent so the page shows through.
+// are left out of the edge pass so they don't get outlined, the background
+// stays transparent so the page shows through, and `edgeWidth` (in render
+// pixels) keeps outlines equally thick when drawing at Retina resolution.
 
 import * as THREE from 'three';
 import { FullScreenQuad, Pass } from 'three/addons/postprocessing/Pass.js';
 
 export class PixelPass extends Pass {
-  constructor(pixelSize, scene, camera, { normalEdge = 0.35, depthEdge = 0.5 } = {}) {
+  constructor(pixelSize, scene, camera, { normalEdge = 0.35, depthEdge = 0.5, edgeWidth = 1 } = {}) {
     super();
     this.pixelSize = pixelSize;
+    this.edgeWidth = edgeWidth;
     this.scene = scene;
     this.camera = camera;
     this.normalEdge = normalEdge;
@@ -32,7 +34,7 @@ export class PixelPass extends Pass {
       uniforms: {
         tDiffuse: { value: null }, tDepth: { value: null }, tNormal: { value: null },
         resolution: { value: new THREE.Vector4() },
-        normalEdge: { value: 0 }, depthEdge: { value: 0 },
+        normalEdge: { value: 0 }, depthEdge: { value: 0 }, edgeStep: { value: 1 },
       },
       vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -40,10 +42,10 @@ export class PixelPass extends Pass {
       fragmentShader: /* glsl */ `
         uniform sampler2D tDiffuse, tDepth, tNormal;
         uniform vec4 resolution;
-        uniform float normalEdge, depthEdge;
+        uniform float normalEdge, depthEdge, edgeStep;
         varying vec2 vUv;
-        float depthAt(int x, int y) { return texture2D(tDepth, vUv + vec2(x, y) * resolution.zw).r; }
-        vec3 normalAt(int x, int y) { return texture2D(tNormal, vUv + vec2(x, y) * resolution.zw).rgb * 2.0 - 1.0; }
+        float depthAt(int x, int y) { return texture2D(tDepth, vUv + vec2(x, y) * edgeStep * resolution.zw).r; }
+        vec3 normalAt(int x, int y) { return texture2D(tNormal, vUv + vec2(x, y) * edgeStep * resolution.zw).rgb * 2.0 - 1.0; }
         float depthEdgeAt(float d) {
           float diff = 0.0;
           diff += clamp(depthAt(1, 0) - d, 0.0, 1.0);
@@ -99,6 +101,7 @@ export class PixelPass extends Pass {
     const u = this.material.uniforms;
     u.normalEdge.value = this.normalEdge;
     u.depthEdge.value = this.depthEdge;
+    u.edgeStep.value = this.edgeWidth;
 
     renderer.setRenderTarget(this.beauty);
     renderer.clear();

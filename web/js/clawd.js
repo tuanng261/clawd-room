@@ -5,12 +5,15 @@
 //     ▘▘ ▝▝       and four little legs.
 //
 // Everything is procedural: each pose sets target joint angles and a facial
-// expression, and the joints ease toward them, so poses blend for free.
+// expression, and the joints ease toward them, so poses blend for free. On top
+// of the pose, a feeling (feelings.js) adds brows, a mouth, sweat or a 💢, a
+// way of moving, and now and then an emoji.
 
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { clamp, damp, dampAngle, esc } from './util.js';
 import { icon } from './icons.js';
+import { FEELINGS } from './feelings.js';
 import { buildItem, GRIP } from './items.js';
 import { glow, toon } from './materials.js';
 
@@ -45,6 +48,17 @@ const G = {
   ray: B(0.12 * U, 0.4 * U, 0.12 * U),
   sweat: B(0.26 * U, 0.42 * U, 0.12 * U),
   shadow: new THREE.CircleGeometry(0.66, 24),
+  // Feelings: brows, a shine in the eyes, mouths, the 💢 vein.
+  brow: B(0.78 * U, 0.2 * U, 0.05),
+  glint: B(0.2 * U, 0.26 * U, 0.02),
+  mouthBar: B(0.86 * U, 0.17 * U, 0.05),
+  mouthStub: B(0.17 * U, 0.3 * U, 0.05),
+  mouthO: B(0.36 * U, 0.42 * U, 0.05),
+  mouthOpen: B(1.0 * U, 0.52 * U, 0.05),
+  tongue: B(0.56 * U, 0.2 * U, 0.02),
+  mouthYawn: B(0.52 * U, 0.72 * U, 0.05),
+  wave: B(0.22 * U, 0.15 * U, 0.05),
+  veinBar: B(0.3 * U, 0.09 * U, 0.04),
 };
 
 const MAT = {
@@ -63,6 +77,10 @@ const MAT = {
   ray: glow('#f5c77e'),
   sweat: glow('#a9c8e6'),
   blue: toon('#6a9bcc'),
+  glint: glow('#ffffff'),
+  tongue: toon('#ef8f87'),
+  vein: glow('#a8231b'),
+  veinBright: glow('#ff5a4a'),
 };
 
 let shadowTex = null;
@@ -95,8 +113,8 @@ const FACES = {
   hmm: { sx: 1, sy: 0.9, dx: 0.22, dy: 0.24, rot: 0, rightSy: 0.6 },
   hmmLeft: { sx: 1, sy: 0.9, dx: -0.22, dy: 0.24, rot: 0, leftSy: 0.6 },
   lookdown: { sx: 1, sy: 0.65, dx: 0, dy: -0.28, rot: 0 },
-  happy: { sx: 1, sy: 1, dx: 0, dy: 0.05, rot: 0, happy: true, blush: true },
-  surprised: { sx: 1.35, sy: 1.15, dx: 0, dy: 0.06, rot: 0 },
+  happy: { sx: 1, sy: 1, dx: 0, dy: 0.05, rot: 0, happy: true, blush: true, mouth: 'smile' },
+  surprised: { sx: 1.35, sy: 1.15, dx: 0, dy: 0.06, rot: 0, mouth: 'o' },
   worried: { sx: 1, sy: 0.8, dx: 0, dy: 0, rot: 0.38, sweat: true },
   sleepy: { sx: 1.1, sy: 0.12, dx: 0, dy: -0.15, rot: 0 },
   curious: { sx: 1, sy: 1.12, dx: 0, dy: 0.05, rot: 0, rightSy: 0.8, blush: true },
@@ -226,10 +244,15 @@ export class Clawd {
     }
 
     // Eyes: a tall slot, or ∩ when happy.
+    const front = 1.8 * U + (skin === 'codex' ? 0.03 : 0.012); // the face (Codex's is on its screen)
     this.eyes = [-1, 1].map((side) => {
       const g = new THREE.Group();
-      g.position.set(side * 1.75 * U, 3.5 * U, 1.8 * U + (skin === 'codex' ? 0.03 : 0.012));
+      g.position.set(side * 1.75 * U, 3.5 * U, front);
       const slot = new THREE.Mesh(G.eye, MAT.eye);
+      const glint = new THREE.Mesh(G.glint, MAT.glint); // shiny eyes (excited, hopeful)
+      glint.position.set(0.1 * U, 0.22 * U, 0.035);
+      glint.visible = false;
+      slot.add(glint);
       const happy = new THREE.Group();
       const top = new THREE.Mesh(G.bar, MAT.eye);
       top.position.y = 0.16 * U;
@@ -241,7 +264,7 @@ export class Clawd {
       happy.visible = false;
       g.add(slot, happy);
       this.body.add(g);
-      return { g, slot, happy, side };
+      return { g, slot, happy, glint, side };
     });
     this.blush = [-1, 1].map((side) => {
       const m = new THREE.Mesh(G.blush, MAT.blush);
@@ -250,10 +273,57 @@ export class Clawd {
       this.body.add(m);
       return m;
     });
-    this.sweat = new THREE.Mesh(G.sweat, MAT.sweat);
-    this.sweat.position.set(2.7 * U, 4.6 * U, 1.2 * U);
+    this.sweat = new THREE.Mesh(G.sweat, MAT.sweat); // on the face's top corner, sliding down
+    this.sweat.position.set(2.55 * U, 4.6 * U, front + 0.02);
     this.sweat.visible = false;
     this.body.add(this.sweat);
+
+    // Feelings: brows and a mouth only show up when a feeling calls for them
+    // (the sprite has neither), plus a 💢 for when nothing works.
+    this.brows = [-1, 1].map((side) => {
+      const mesh = new THREE.Mesh(G.brow, MAT.eye);
+      mesh.position.set(side * 1.75 * U, 4.32 * U, front);
+      mesh.visible = false;
+      this.body.add(mesh);
+      return { mesh, side };
+    });
+    this.browBase = 4.32;
+    this.browState = { a: 0, l: 0, q: 0, show: 0 };
+    this.mouths = {};
+    const mouth = new THREE.Group();
+    mouth.position.set(0, 2.42 * U, front);
+    const part = (shape, geo, x, y, mat = MAT.eye, z = 0) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x * U, y * U, z);
+      (this.mouths[shape] ||= new THREE.Group()).add(m);
+      return m;
+    };
+    part('smile', G.mouthBar, 0, -0.1); part('smile', G.mouthStub, -0.345, 0.06); part('smile', G.mouthStub, 0.345, 0.06);
+    part('frown', G.mouthBar, 0, 0.1); part('frown', G.mouthStub, -0.345, -0.06); part('frown', G.mouthStub, 0.345, -0.06);
+    part('flat', G.mouthBar, 0, 0);
+    part('o', G.mouthO, 0, 0);
+    part('grin', G.mouthOpen, 0, 0); part('grin', G.tongue, 0, -0.13, MAT.tongue, 0.03);
+    this.waves = [0, 1, 2, 3].map((i) => part('wavy', G.wave, -0.33 + i * 0.22, i % 2 ? 0.05 : -0.05));
+    part('yawn', G.mouthYawn, 0, -0.05);
+    for (const m of Object.values(this.mouths)) { m.visible = false; mouth.add(m); }
+    this.body.add(mouth);
+    this.mouthShape = null;
+    this.mouthAt = 0;
+    this.vein = new THREE.Group();
+    const veinMat = skin === 'codex' ? MAT.veinBright : MAT.vein; // deep red on orange, bright red on charcoal
+    for (const qx of [-1, 1]) {
+      for (const qy of [-1, 1]) {
+        const h = new THREE.Mesh(G.veinBar, veinMat);
+        h.position.set(qx * 0.2 * U, qy * 0.07 * U, 0);
+        const v = new THREE.Mesh(G.veinBar, veinMat);
+        v.rotation.z = Math.PI / 2;
+        v.position.set(qx * 0.07 * U, qy * 0.2 * U, 0);
+        this.vein.add(h, v);
+      }
+    }
+    this.vein.position.set(2.45 * U, 4.55 * U, front + 0.005);
+    this.vein.visible = false;
+    this.body.add(this.vein);
 
     // Arm pivots sit on the sides of the torso; the stub sticks outward.
     this.arms = [-1, 1].map((side) => {
@@ -354,12 +424,24 @@ export class Clawd {
     this.hopUntil = 0;
     this.moodUntil = 0;
     this.mood = null;
+    // Feelings (feelings.js): the ongoing one, a short reaction on top, emoji pops.
+    this.feel = null;
+    this.reaction = null;
+    this.popAt = Infinity;
+    this.emojiAt = -10;
+    this.emojiFeel = null;
+    this.emojiGap = id === 'main' ? 7 : 12; // seconds between emoji (helpers are quieter)
+    this.fxAt = {};
+    this.seed = Math.random() * 10;
+    this.tempo = 1; // feelings speed up or slow down how Clawd moves
+    this.clock = 0;
+    this.poseClock = 0;
     this.ideaAt = -10;
     this.appear = 0;
     this.vanishing = false;
     this.onArrive = null;
     this.j = { armLy: 0, armLz: 0, armRy: 0, armRz: 0, legs: [0, 0, 0, 0], lean: 0, twist: 0, tilt: 0, squash: 1, hop: 0 };
-    this.eyeState = { sx: 1, sy: 1, dx: 0, dy: 0, rot: 0, lsy: 1, rsy: 1 };
+    this.eyeState = { sx: 1, sy: 1, dx: 0, dy: 0, rot: 0, lsy: 1, rsy: 1, open: 1 };
     this.root.scale.setScalar(0.0001);
   }
 
@@ -402,6 +484,7 @@ export class Clawd {
         add(B(0.15 * U, 1.6 * U, 0.05), dark, cx + 0.57 * U, cy, front);
       }
       add(B(2.3 * U, 0.15 * U, 0.05), dark, 0, 3.5 * U + 0.4 * U, front);
+      this.browBase = 4.6; // brows go above the frames
     } else if (kind === 'headphones') {
       const cup = toon('#d97757');
       add(B(6.5 * U, 0.3 * U, 0.7 * U), dark, 0, 5.15 * U, 0);
@@ -554,6 +637,7 @@ export class Clawd {
     if (pose === this.pose) return;
     this.pose = pose;
     this.poseAt = this.now;
+    this.poseClock = this.clock;
   }
 
   /** Removing a parent doesn't detach CSS2D children, so do it explicitly. */
@@ -568,8 +652,7 @@ export class Clawd {
   }
 
   shake() {
-    this.shakeUntil = this.now + 0.7;
-    this.setMood('worried', 2.6);
+    this.shakeUntil = this.now + 0.7; // the face comes from the feeling (startled, frustrated…)
     this.fx.emit(0, HEIGHT + 0.1, 0, { n: 9, speed: 0.45, up: 0.35, life: 1.0, mats: ['smoke'], size: 2.4, float: true });
   }
 
@@ -625,7 +708,7 @@ export class Clawd {
     this.petCount = this.now - (this.petAt ?? -10) < 2.5 ? (this.petCount || 0) + 1 : 1;
     this.petAt = this.now;
     this.hop();
-    this.setMood('happy', 2.2);
+    this.react('loved', 2.2, { pop: this.petCount >= 3 }); // hearts first; keep petting for the 🥰
     this.fx.emit(0, HEIGHT + 0.1, 0.2, { n: 8, speed: 0.55, up: 0.9, life: 0.9, mats: ['pink', 'white', 'pink'] });
     this.float('♥', 'love');
     return this.petCount;
@@ -661,6 +744,62 @@ export class Clawd {
     this.mood = name;
     this.moodUntil = this.now + seconds;
   }
+
+  /** The ongoing feeling (feelings.js). A new one pops its emoji: always for strong feelings, sometimes for calm ones. */
+  setFeeling(id) {
+    if (id === this.feel) return;
+    this.feel = id;
+    const F = FEELINGS[id];
+    if (!F) { this.popAt = Infinity; return; }
+    const show = F.strong || Math.random() < (this.id === 'main' ? 0.45 : 0.3);
+    this.popAt = show ? this.now + 0.9 : F.every ? this.now + F.every * (0.5 + Math.random() * 0.5) : Infinity;
+  }
+
+  /** A short burst of feeling (a step broke, a fix landed…): face, body and emoji at once. */
+  react(id, seconds = 2.5, { pop = true } = {}) {
+    if (!FEELINGS[id]) return;
+    this.reaction = { id, at: this.now, until: this.now + seconds };
+    if (id === 'startled' || id === 'triumphant' || id === 'eager' || id === 'relieved') this.hop();
+    if (id === 'triumphant' || id === 'proud') this.fx.emit(0, HEIGHT + 0.15, 0.1, { n: 12, speed: 0.9, up: 0.8, mats: ['gold', 'white', 'gold'] });
+    if (pop) this.popEmoji(id, true);
+  }
+
+  /** What Clawd feels this moment: a reaction while it lasts, else the ongoing feeling. */
+  get feeling() {
+    return this.reaction && this.now < this.reaction.until ? this.reaction.id : this.feel;
+  }
+
+  /** An emoji pops up beside the head for a moment (not too often). */
+  popEmoji(id, urgent = false) {
+    const F = FEELINGS[id];
+    if (!F?.emoji?.length || this.vanishing || this.appear < 1) return false;
+    if (this.now - this.emojiAt < (urgent ? 0.6 : this.emojiGap)) return false;
+    this.emojiAt = this.now;
+    this.emojiFeel = id;
+    // One at a time: a new emoji replaces the one still showing.
+    this.floats = this.floats.filter((f) => (f.beside ? (f.obj.removeFromParent(), false) : true));
+    const el = document.createElement('div');
+    el.className = 'emo-anchor';
+    el.innerHTML = `<div class="emopop${this.scale < 1 ? ' small' : ''}">${F.emoji[Math.floor(Math.random() * F.emoji.length)]}</div>`;
+    const obj = new CSS2DObject(el);
+    this.lift.add(obj);
+    this.floats.push({ obj, until: this.now + 2.5, beside: true });
+    this.placeBeside();
+    return true;
+  }
+
+  /** Emoji sit just left of the head on screen, whichever way Clawd faces and however close the camera is. */
+  placeBeside() {
+    const h = this.heading;
+    const rx = Math.cos(VIEW_YAW); // the camera's right, in the room…
+    const rz = -Math.sin(VIEW_YAW);
+    const lx = rx * Math.cos(h) - rz * Math.sin(h); // …turned into Clawd's own frame
+    const lz = rx * Math.sin(h) + rz * Math.cos(h);
+    for (const f of this.floats) if (f.beside) f.obj.position.set(-lx * 0.68, HEIGHT * 0.74, -lz * 0.68);
+  }
+
+  /** A yawn every few seconds, for the feelings that yawn. */
+  yawning(t) { return (t + this.seed) % 9 > 7.6; }
 
   vanish(cb) {
     this.vanishing = true;
@@ -751,9 +890,15 @@ export class Clawd {
     this.root.position.set(this.pos.x, 0, this.pos.y);
     this.root.rotation.y = this.heading;
 
+    // Feelings change the pace: frustration types faster, boredom drags.
+    const feel = FEELINGS[this.feeling] || null;
+    this.tempo = damp(this.tempo, feel?.body.tempo || 1, 3, dt);
+    this.clock += dt * this.tempo;
+
     // Joint targets + expression for the current pose.
     const j = { armLy: 0.1, armLz: -0.12, armRy: -0.1, armRz: 0.12, legs: [0, 0, 0, 0], lean: 0, twist: 0, tilt: 0, squash: 1, hop: 0, face: 'neutral', prop: null };
-    const pt = t - this.poseAt;
+    const pc = this.clock;
+    const pt = pc - this.poseClock;
     if (moving) {
       const s = Math.sin(this.phase);
       j.legs = [s * 0.75, -s * 0.75, s * 0.75, -s * 0.75];
@@ -764,7 +909,7 @@ export class Clawd {
       j.lean = 0.1;
       j.hop = Math.abs(Math.cos(this.phase)) * 0.06;
     } else {
-      this.applyPose(j, t, pt);
+      this.applyPose(j, pc, pt);
       j.prop = j.prop ?? POSE_PROP[this.pose] ?? null;
       // Typing sends little bits of code (or green terminal text) up into the screen.
       if (this.pose === 'type') {
@@ -798,7 +943,18 @@ export class Clawd {
         this.hand.scale.setScalar(Math.max(0.001, this.hand.userData.scale * (k < 1 ? easeOutBack(k) : 1)));
       }
     }
-    if (!moving) this.beat(t, pt);
+    if (!moving) this.beat(pc, pt);
+    if (feel) {
+      this.feelBody(j, feel, t, moving);
+      this.feelFx(feel, t, moving);
+    }
+    // Now and then, show how it feels (not over a reaction's own emoji).
+    if (t >= this.popAt) {
+      const F = FEELINGS[this.feel];
+      const shown = this.emojiFeel === this.feel && t - this.emojiAt < 12;
+      const popped = !!F && (shown || (!(this.reaction && t < this.reaction.until) && this.popEmoji(this.feel)));
+      this.popAt = !F ? Infinity : popped ? (F.every ? t + F.every * (0.75 + Math.random() * 0.5) : Infinity) : t + 2;
+    }
 
     if (t < this.shakeUntil) j.twist += Math.sin(t * 42) * 0.16 * ((this.shakeUntil - t) / 0.7);
     if (t < this.hopUntil) j.hop += Math.sin(((this.hopUntil - t) / 0.6) * Math.PI) * 0.28;
@@ -822,9 +978,10 @@ export class Clawd {
     this.body.rotation.set(J.lean, J.twist, J.tilt);
     this.body.scale.set(1 + (1 - J.squash) * 0.5, J.squash, 1 + (1 - J.squash) * 0.5);
 
-    this.updateFace(j.face, dt, t, j.gaze || 0);
+    this.updateFace(j.face, dt, t, j.gaze || 0, this.pull ? null : feel?.face); // the ta-da moment stays a ta-da
     this.fx.update(dt);
     // Floating numbers fade by themselves (CSS); drop them when done.
+    if (this.floats.length) this.placeBeside();
     if (this.floats.length && this.floats[0].until < t) {
       this.floats = this.floats.filter((f) => (f.until < t ? (f.obj.removeFromParent(), false) : true));
     }
@@ -950,33 +1107,136 @@ export class Clawd {
     }
   }
 
-  updateFace(name, dt, t, gaze = 0) {
+  /** The pose's expression (FACES), with the feeling's face (O, from feelings.js) on top. */
+  updateFace(name, dt, t, gaze = 0, O = null) {
     const f = FACES[name] || FACES.neutral;
     const E = this.eyeState;
-    let sy = f.sy;
+    const yawn = !!O?.yawn && this.yawning(t);
+    // A feeling that opens the eyes wins over a pose's ∩ ∩.
+    const happy = !yawn && (O ? !!O.happy || (!!f.happy && O.eyes == null && !O.uneven) : !!f.happy);
+    const open = yawn ? 0.15 : Math.max(0.1, f.sy * (O?.eyes ?? 1));
+    let sy = open;
     // Blink every few seconds (not while sleepy or happy).
     if (t > this.blinkAt) {
       if (t > this.blinkAt + 0.12) this.blinkAt = t + 2 + Math.random() * 3.5;
-      else if (!f.happy && name !== 'sleepy') sy = 0.1;
+      else if (!happy && name !== 'sleepy') sy = 0.1;
     }
     E.sx = damp(E.sx, f.sx, 25, dt);
     E.sy = damp(E.sy, sy, 30, dt);
+    E.open = damp(E.open, open, 14, dt);
     E.dx = damp(E.dx, f.dx + gaze, 14, dt);
-    E.dy = damp(E.dy, f.dy, 14, dt);
+    E.dy = damp(E.dy, f.dy + (O?.look || 0), 14, dt);
     E.rot = damp(E.rot, f.rot, 16, dt);
-    E.lsy = damp(E.lsy, f.leftSy ?? 1, 16, dt);
-    E.rsy = damp(E.rsy, f.rightSy ?? 1, 16, dt);
+    E.lsy = damp(E.lsy, (f.leftSy ?? 1) * (O?.uneven?.[0] ?? 1), 16, dt);
+    E.rsy = damp(E.rsy, (f.rightSy ?? 1) * (O?.uneven?.[1] ?? 1), 16, dt);
     for (const e of this.eyes) {
-      e.slot.visible = !f.happy;
-      e.happy.visible = !!f.happy;
+      e.slot.visible = !happy;
+      e.happy.visible = happy;
+      e.glint.visible = !!O?.glint && E.sy > 0.45;
       e.g.position.x = e.side * 1.75 * U + E.dx * U;
       e.g.position.y = 3.5 * U + E.dy * U;
       e.slot.scale.set(E.sx, E.sy * (e.side < 0 ? E.lsy : E.rsy), 1);
       e.g.rotation.z = -e.side * E.rot;
     }
-    for (const b of this.blush) b.visible = !!f.blush;
-    this.sweat.visible = !!f.sweat;
-    if (f.sweat) this.sweat.position.y = 4.6 * U - ((t * 0.6) % 1) * 0.25;
+    for (const b of this.blush) b.visible = !!(f.blush || O?.blush);
+    const sweat = f.sweat || O?.sweat;
+    this.sweat.visible = !!sweat;
+    if (sweat) this.sweat.position.y = 4.55 * U - ((t * 0.6) % 1) * 0.22;
+    this.updateBrows(O, dt);
+    this.setMouth(yawn ? 'yawn' : O?.mouth || f.mouth || null, t);
+    // 💢 on the forehead, throbbing.
+    this.vein.visible = !!O?.vein;
+    if (O?.vein) this.vein.scale.setScalar(0.85 + Math.abs(Math.sin(t * 5)) * 0.35);
+  }
+
+  /** Brows: angled (cross or worried), raised or lowered, one up when puzzled; gone when the feeling has none. */
+  updateBrows(O, dt) {
+    const S = this.browState;
+    S.show = damp(S.show, O && (O.brow || O.lift || O.quirk) ? 1 : 0, 12, dt);
+    S.a = damp(S.a, O?.brow || 0, 14, dt);
+    S.l = damp(S.l, O?.lift || 0, 14, dt);
+    S.q = damp(S.q, O?.quirk || 0, 14, dt);
+    const E = this.eyeState;
+    for (const b of this.brows) {
+      const m = b.mesh;
+      m.visible = S.show > 0.03;
+      if (!m.visible) continue;
+      const up = b.side > 0 ? S.q : -S.q * 0.25;
+      // Above the eye however open it is, following where the eyes look.
+      m.position.x = b.side * 1.75 * U + E.dx * 0.4 * U;
+      m.position.y = (this.browBase + (S.l + up) * 0.9 + E.dy * 0.5 + (E.open - 1) * 0.4) * U;
+      m.rotation.z = b.side * (S.a + (b.side > 0 ? S.q * 0.3 : 0));
+      m.scale.set(S.show, S.show, 1);
+    }
+  }
+
+  /** Show one mouth shape (or none), popping in when it changes; a nervous mouth wobbles. */
+  setMouth(shape, t) {
+    if (shape !== this.mouthShape) {
+      if (this.mouthShape) this.mouths[this.mouthShape].visible = false;
+      this.mouthShape = this.mouths[shape] ? shape : null;
+      this.mouthAt = t;
+      if (this.mouthShape) this.mouths[this.mouthShape].visible = true;
+    }
+    if (!this.mouthShape) return;
+    const k = Math.min(1, (t - this.mouthAt) / 0.16);
+    this.mouths[this.mouthShape].scale.setScalar(Math.max(0.001, k < 1 ? easeOutBack(k) : 1));
+    if (this.mouthShape === 'wavy') this.waves.forEach((w, i) => { w.position.y = ((i % 2 ? 0.05 : -0.05) + Math.sin(t * 13 + i * 1.7) * 0.035) * U; });
+  }
+
+  /** How a feeling shows in the body: bouncing, trembling, slumping, puffing up, cheering… */
+  feelBody(j, F, t, moving) {
+    const b = F.body;
+    const c = this.clock;
+    const seated = this.seat > 0 && !moving;
+    if (b.bounce) j.hop += Math.abs(Math.sin(c * 7.5)) * b.bounce * (seated ? 0.4 : 1);
+    if (b.sway) j.tilt += Math.sin(c * 2.1) * b.sway;
+    if (b.wobble) { j.tilt += Math.sin(t * 2.4) * b.wobble; j.twist += Math.cos(t * 2.4) * b.wobble * 0.7; }
+    if (b.tremble) j.twist += Math.sin(t * 47) * 0.02 * b.tremble;
+    if (b.lean) j.lean += b.lean;
+    if (b.slump) { j.squash *= 1 - 0.05 * b.slump; j.lean += 0.07 * b.slump; }
+    if (b.puff) { j.squash *= 1 + b.puff * 0.6; j.lean -= b.puff; }
+    if (moving) return;
+    const R = this.reaction && t < this.reaction.until ? this.reaction : null;
+    const since = R ? t - R.at : Infinity;
+    if (b.cheer && R) { j.armLz = -1.75 + Math.sin(t * 10) * 0.2; j.armRz = 1.75 - Math.sin(t * 10) * 0.2; j.armLy = 0.1; j.armRy = -0.1; }
+    if (b.scratch && since < 2.2) { j.armRy = -0.35; j.armRz = 2.0 + Math.sin(t * 17) * 0.13; j.tilt -= 0.08; }
+    if (b.exhale && since < 0.9) j.squash *= 1 - Math.sin((since / 0.9) * Math.PI) * 0.07;
+    if (F.face.yawn && this.yawning(t)) { j.squash *= 1.05; j.lean -= 0.08; }
+    if (b.stomp && !seated) {
+      const k = ((t + this.seed) % 2.8) / 2.8;
+      if (k < 0.16) { const s = Math.sin((k / 0.16) * Math.PI); j.legs[1] = -0.75 * s; j.legs[2] = -0.75 * s; }
+    }
+  }
+
+  /** The little effects that go with a feeling: steam, tears, sparkles, notes, dizzy stars, stomping dust. */
+  feelFx(F, t, moving) {
+    const b = F.body;
+    const fx = this.fx;
+    const y = this.body.position.y;
+    const due = (key, gap) => {
+      if (t - (this.fxAt[key] ?? -99) < gap) return false;
+      this.fxAt[key] = t;
+      return true;
+    };
+    if (b.steam && due('steam', 0.8)) fx.emit((Math.random() - 0.5) * 0.4, HEIGHT + 0.04 + y, 0, { n: 2, speed: 0.15, up: 0.55, life: 0.9, mats: ['steam'], size: 2, float: true });
+    if (F.face.tears && due('tears', 0.55)) {
+      const side = Math.random() < 0.5 ? -1 : 1;
+      fx.emit(side * 1.75 * U, 3.0 * U + y, 1.9 * U, { n: 1, life: 0.7, mats: ['sky'], dir: [side * 0.05, -0.15, 0.2], size: 0.9 });
+    }
+    if (b.sparkle && due('sparkle', 1.3)) fx.emit((Math.random() - 0.5) * 0.8, HEIGHT * (0.6 + Math.random() * 0.5) + y, 0.25, { n: 3, speed: 0.35, up: 0.4, life: 0.6, mats: ['gold', 'white'] });
+    if (b.notes && !moving && due('notes', 3.8)) this.float('♪', 'note');
+    if (b.stars && due('stars', 0.12)) {
+      const a = t * 4;
+      fx.emit(Math.cos(a) * 0.42, HEIGHT + 0.12 + y, Math.sin(a) * 0.42, { n: 1, speed: 0.02, up: 0.02, life: 0.45, mats: ['gold'], size: 1.1, float: true });
+    }
+    if (b.stomp && !moving && this.seat <= 0) {
+      const n = Math.floor((t + this.seed) / 2.8);
+      if (n !== this.stompN && ((t + this.seed) % 2.8) / 2.8 > 0.16) { // the foot just came down
+        if (this.stompN != null) fx.emit(0.15, 0.03, 0.2, { n: 5, speed: 0.4, up: 0.2, life: 0.5, mats: ['smoke'], size: 1.6, float: true });
+        this.stompN = n;
+      }
+    }
   }
 
   applyPose(j, t, pt) {

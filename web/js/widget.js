@@ -9,6 +9,7 @@
 // calling clawdWidget.setMode); in a plain browser the page just switches.
 
 import { badgeHtml } from './brands.js';
+import { FEELINGS, feelingFor } from './feelings.js';
 import { icon } from './icons.js';
 import { brandFor } from './items.js';
 import { asDoing, simplify } from './plain.js';
@@ -26,9 +27,23 @@ const SVG = {
   hide: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
 };
 
+// The pill has no 3D Clawd, so its little face shows the feeling (style.css .wface.f-*).
+const PILL_FACE = {
+  relieved: 'happy', triumphant: 'happy', proud: 'happy', content: 'happy', loved: 'happy', joyful: 'happy', sheepish: 'happy',
+  nervous: 'worry', cautious: 'worry', exhausted: 'worry', deflated: 'worry', hopeful: 'worry',
+  frustrated: 'cross', impatient: 'cross', determined: 'cross',
+  eager: 'wide', excited: 'wide', startled: 'wide', curious: 'wide', inspired: 'wide',
+  bored: 'sleepy', tired: 'sleepy', sleepy: 'sleepy',
+  focused: 'squint', thoughtful: 'squint', puzzled: 'squint', patient: 'squint', dazed: 'squint',
+};
+
 /** What Clawd is up to, in a few words, for the caption and the pill. */
 export function glance(s) {
   const now = clock.now();
+  return { ...glanceText(s, now), feel: feelingFor(s, now) };
+}
+
+function glanceText(s, now) {
   if (!s) return { tone: 'stale', head: 'Waiting for Claude Code…', sub: '', since: null, mark: icon('moon') };
   const act = s.pending?.length ? s.pending[s.pending.length - 1] : null;
   const tasks = s.tasks || [];
@@ -58,8 +73,9 @@ export function glance(s) {
 }
 
 export class Widget {
-  constructor({ onMode }) {
+  constructor({ onMode, onReset }) {
     this.onMode = onMode;
+    this.onReset = onReset;
     this.snap = null;
     this.el = document.createElement('div');
     this.el.className = 'wdg';
@@ -71,19 +87,28 @@ export class Widget {
         <button data-w="hide" title="Hide (bring it back from the menu bar)">${SVG.hide}</button>
       </div>
       <div class="wdg-cap"></div>
-      <div class="wdg-pill" title="Click to open the corner view"></div>`;
+      <div class="wdg-pill" title="Click to open the corner view"></div>
+      <div class="wdg-emo" aria-hidden="true"></div>`;
     document.body.appendChild(this.el);
     document.body.classList.add('widget');
     if (nativeApp()) document.body.classList.add('in-app');
     this.ctl = this.el.querySelector('.wdg-ctl');
-    this.el.addEventListener('click', (e) => {
+    this.emoEl = this.el.querySelector('.wdg-emo');
+    this.feel = undefined;
+    this.emoAt = 0;
+    // The buttons move to the top bar in the full view, so they listen for themselves.
+    this.ctl.addEventListener('click', (e) => {
       const b = e.target.closest('[data-w]');
-      if (b) this.request(b.dataset.w);
-      else if (this.mode === 'pill' && e.target.closest('.wdg-pill')) this.request('mini');
+      if (!b) return;
+      e.stopPropagation();
+      this.request(b.dataset.w);
+    });
+    this.el.addEventListener('click', (e) => {
+      if (this.mode === 'pill' && e.target.closest('.wdg-pill')) this.request('mini');
     });
     // The Mac app calls this when the window changes size (and once it has loaded).
     const self = this;
-    window.clawdWidget = { setMode: (m) => self.apply(m), get mode() { return self.mode; } };
+    window.clawdWidget = { setMode: (m) => self.apply(m), reset: () => self.onReset?.(), get mode() { return self.mode; } };
     this.apply(params.get('mode') || 'mini');
     setInterval(() => this.tick(), 500);
   }
@@ -119,8 +144,20 @@ export class Widget {
     const html = `<span class="wm">${g.mark}</span><span class="wx"><b>${esc(g.head)}</b>${g.sub ? `<small>${esc(g.sub)}</small>` : ''}</span>${time}`;
     const bar = g.progress != null ? `<i class="wbar"><b style="width:${Math.round(g.progress * 100)}%"></b></i>` : '';
     this.put('.wdg-cap', `${html}${bar}`, `wdg-cap ${g.tone}`);
-    this.put('.wdg-pill', `<span class="wface ${g.tone}"><i></i><i></i></span>${html}`, `wdg-pill ${g.tone}`);
+    this.put('.wdg-pill', `<span class="wface ${g.tone} f-${PILL_FACE[g.feel] || 'plain'}"><i></i><i></i></span>${html}`, `wdg-pill ${g.tone}`);
     document.body.dataset.tone = g.tone;
+    this.feelPop(g.feel);
+  }
+
+  /** A new strong feeling pops its emoji over the pill's face (now and then, like Clawd's own). */
+  feelPop(feel) {
+    if (feel === this.feel) return;
+    const first = this.feel === undefined;
+    this.feel = feel;
+    const F = FEELINGS[feel];
+    if (first || !F?.strong || Date.now() - this.emoAt < 6000) return;
+    this.emoAt = Date.now();
+    this.emoEl.innerHTML = `<b>${F.emoji[Math.floor(Math.random() * F.emoji.length)]}</b>`;
   }
 
   put(sel, html, cls) {
@@ -132,5 +169,6 @@ export class Widget {
   tick() {
     const now = clock.now();
     for (const el of this.el.querySelectorAll('[data-since]')) el.textContent = fmtDur(now - Number(el.dataset.since));
+    if (feelingFor(this.snap, now) !== this.feel) this.render(); // feelings change with time too (impatient, bored…)
   }
 }

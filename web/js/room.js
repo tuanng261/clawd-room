@@ -7,6 +7,7 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { Clawd, setViewYaw, Sparks, STATION_POSE } from './clawd.js';
 import { cardHtml, PROPS, roleIcon, tipHtml } from './interact.js';
 import { ACTIVITIES, activityFor } from './activities.js';
+import { FEELINGS, feelingFor, helperFeeling, reactionFor } from './feelings.js';
 import { MOODS, moodFor, moodOfText } from './thinking.js';
 import { brandFor, buildItem, itemFor } from './items.js';
 import { NavGrid } from './nav.js';
@@ -88,6 +89,13 @@ export class Room {
     this.tipEl.className = 'tag-anchor';
     this.tipObj = new CSS2DObject(this.tipEl);
     this.group.add(this.tipObj);
+    // Hovering Clawd (or a helper) says how it feels.
+    this.feelTipEl = document.createElement('div');
+    this.feelTipEl.className = 'tag-anchor';
+    this.feelTipObj = new CSS2DObject(this.feelTipEl);
+    this.group.add(this.feelTipObj);
+    this.mascotHover = null;
+    this.feelTipKey = '';
     // The card is a screen-level element so it can stay clear of the panels.
     this.cardEl = document.createElement('div');
     this.cardEl.className = 'propcard';
@@ -316,21 +324,35 @@ export class Room {
       this.lastThoughtAt = s.thought.at;
     }
     const tools = (s.log || []).filter((e) => e.kind === 'tool');
+    const tidied = (s.log || []).filter((e) => e.kind === 'note' && e.icon === 'compress').pop()?.at || null;
     if (!prev) {
       this.seenTasks = new Set(done);
+      this.lastTurnStart = s.turn?.startedAt || null;
+      this.lastTidy = tidied;
       this.lastTurnEnd = s.turn?.endedAt || null;
       this.lastErr = s.current?.status === 'error' ? s.current.id : null;
       this.lastToolId = tools.length ? tools[tools.length - 1].id : 0;
       this.toolStatus = new Map(tools.map((e) => [e.id, e.status]));
       return;
     }
-    this.watchTools(tools);
+    this.watchTools(tools, s.turn?.startedAt || 0);
+    // A new message from you: what are we making?
+    if (s.turn?.startedAt && s.turn.startedAt !== this.lastTurnStart) {
+      this.lastTurnStart = s.turn.startedAt;
+      if (!s.turn.auto && clock.now() - s.turn.startedAt < 15000) this.clawd.react('eager', 1.6);
+    }
+    // Memory got tidied up (context compacted): where was I?
+    if (tidied && tidied !== this.lastTidy) {
+      this.lastTidy = tidied;
+      if (clock.now() - tidied < 20000) this.clawd.react('dazed', 4);
+    }
     for (const key of done) {
       if (this.seenTasks.has(key)) continue;
       this.seenTasks.add(key);
       const b = this.bounds.whiteboard;
       this.confetti.burst((b.min.x + b.max.x) / 2, 1.6, (b.min.z + b.max.z) / 2 + 0.4, 36, 0.9);
       this.clawd.hop();
+      this.clawd.react('proud', 2);
     }
     const cur = s.current;
     if (cur?.status === 'error' && cur.id !== this.lastErr) {
@@ -343,6 +365,7 @@ export class Room {
     const end = s.turn?.endedAt || null;
     if (end && end !== this.lastTurnEnd) {
       this.lastTurnEnd = end;
+      if (s.turn.interrupted && clock.now() - end < 15000) this.clawd.react('startled', 1.2); // you stopped it: oops
       if (!s.turn.interrupted && clock.now() - end < 15000) {
         const st = this.st.stage.spot;
         setTimeout(() => this.confetti.burst(st[0], 1.2, st[1], 55, 1.1), 900);
@@ -350,9 +373,10 @@ export class Room {
     }
   }
 
-  /** New steps → pull out the tool; finished steps → a little floating result. */
-  watchTools(tools) {
+  /** New steps → pull out the tool; finished steps → a little floating result and a feeling. */
+  watchTools(tools, start = 0) {
     const now = clock.now();
+    const turnSteps = tools.filter((e) => e.at >= start);
     const fresh = tools.filter((e) => e.id > this.lastToolId);
     if (fresh.length) {
       const e = fresh[fresh.length - 1];
@@ -367,6 +391,8 @@ export class Room {
       if (e.status === 'error') this.queueFloat(`✗ ${esc(e.tool || 'step')} failed`, 'bad');
       else if (d && (d.add || d.del)) this.queueFloat(d.whole ? `<b class="add">+${d.add}</b> lines` : `<b class="add">+${d.add}</b> <b class="del">−${d.del}</b>`, 'diff');
       else if ((e.duration || 0) >= 3000) this.queueFloat(`✓ ${fmtDur(e.duration)}`, 'good');
+      const feel = e.at >= start ? reactionFor(e, turnSteps) : null;
+      if (feel) this.clawd.react(feel[0], feel[1]);
     }
     this.toolStatus = new Map(tools.map((e) => [e.id, e.status]));
   }
@@ -419,6 +445,27 @@ export class Room {
     this.hoverHl.set(prop ? prop.box.clone().expandByScalar(0.04) : null);
     if (prop) this.placeOver(this.tipObj, prop);
     this.tipEl.innerHTML = prop && prop !== this.carded ? tipHtml(prop) : '';
+  }
+
+  /** Hovering a Clawd: a little tip under it saying how it feels and what it would say. */
+  hoverMascot(id) {
+    const c = id === 'main' ? this.clawd : id?.startsWith('agent:') ? [...this.helpers.values()].find((h) => 'agent:' + h.agent?.id === id)?.clawd : null;
+    if (c === this.mascotHover) return;
+    this.mascotHover = c || null;
+    this.feelTipKey = '';
+    this.feelTipEl.innerHTML = '';
+  }
+
+  updateFeelTip() {
+    const c = this.mascotHover;
+    if (!c) return;
+    if (c.vanishing) { this.hoverMascot(null); return; }
+    this.feelTipObj.position.set(c.pos.x, 0.02, c.pos.y);
+    const id = c.feeling;
+    if (id === this.feelTipKey) return;
+    this.feelTipKey = id;
+    const F = FEELINGS[id];
+    this.feelTipEl.innerHTML = F ? `<div class="proptip feeltip"><b>${F.emoji[0]} ${esc(F.word)}</b><span>“${esc(F.says)}”</span></div>` : '';
   }
 
   placeOver(obj, prop) {
@@ -603,7 +650,8 @@ export class Room {
     }
     const name = v.prop.info.name.toLowerCase();
     const text = !v.arrived ? `Going to look at the ${name}` : v.prop.kind === 'coffeeCounter' ? 'Coffee break!' : v.prop.role === 'bed' ? 'Quick nap' : `Playing with the ${name}`;
-    return { station: v.station, pose: v.pose, tag: { text, iconName: roleIcon(v.prop.role), tone: 'idle' }, bubble: v.arrived ? v.bubble : null };
+    const feel = !v.arrived ? 'curious' : v.prop.kind === 'coffeeCounter' ? 'content' : v.prop.role === 'bed' ? 'sleepy' : 'joyful';
+    return { station: v.station, pose: v.pose, tag: { text, iconName: roleIcon(v.prop.role), tone: 'idle' }, bubble: v.arrived ? v.bubble : null, feel };
   }
 
   onVisit(v) {
@@ -926,6 +974,21 @@ export class Room {
         pose = M.pose === 'pace' ? 'recall' : M.pose === 'draw' ? 'sketch' : M.pose;
         item = M.item ? { kind: M.item } : null;
       }
+      // How the helper feels: its latest step tells if its tries are failing or finally worked.
+      const cur = a.current;
+      const curKey = cur ? `${cur.id}|${cur.status}` : '';
+      if (curKey !== h.curKey) {
+        const fresh = cur && h.curKey !== undefined && clock.now() - (cur.endedAt || cur.startedAt || 0) < 8000;
+        h.curKey = curKey;
+        if (fresh && cur.status === 'error') {
+          h.fails = (h.fails || 0) + 1;
+          h.clawd.react(h.fails >= 2 ? 'frustrated' : 'startled', 2);
+        } else if (fresh && cur.status === 'done' && h.fails) {
+          h.clawd.react(h.fails >= 2 ? 'triumphant' : 'relieved', 2.4);
+          h.fails = 0;
+        }
+      }
+      h.clawd.setFeeling(helperFeeling(a, clock.now(), h.fails || 0));
       const th = a.thought && clock.now() - a.thought.at < 7000 ? simplify(a.thought.text, 10) : '';
       if (a.thought?.at && a.thought.at !== h.lastThoughtAt) {
         if (h.lastThoughtAt !== undefined) h.clawd.idea();
@@ -959,7 +1022,8 @@ export class Room {
     const ok = h.agent?.status !== 'failed';
     c.setTag({ text: h.agent?.description || 'Helper', sub: ok ? 'Done, heading out' : 'Stopped', iconName: ok ? 'check' : 'alert', helper: true, hat: h.color });
     c.setBubble(ok ? 'ok' : 'err');
-    c.setPose('celebrate');
+    c.setPose(ok ? 'celebrate' : 'idle');
+    c.react(ok ? 'proud' : 'deflated', 3);
     c.hop();
     setTimeout(() => {
       c.setBubble(null);
@@ -1003,6 +1067,7 @@ export class Room {
       this.lastFloatAt = t;
     }
     this.drive(this.clawd, intent, 0);
+    this.clawd.setFeeling(intent.feel || feelingFor(s, now));
     this.syncHelpers(s);
     this.clawd.update(dt, t);
     for (const h of this.helpers.values()) h.clawd.update(dt, t);
@@ -1010,6 +1075,7 @@ export class Room {
     this.updateWalls(dt);
     this.updateReacts();
     this.updateFlyers(dt);
+    this.updateFeelTip();
     this.fx.update(dt);
     this.hoverHl.update(dt, t);
     if (this.carded) {
@@ -1177,6 +1243,7 @@ export class Room {
     for (const m of this.ghostMats?.values() || []) m.dispose();
     this.more.removeFromParent();
     this.tipObj.removeFromParent();
+    this.feelTipObj.removeFromParent();
     this.cardEl.remove();
     this.clawd.dispose();
     for (const h of this.helpers.values()) h.clawd.dispose();
