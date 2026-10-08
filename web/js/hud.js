@@ -313,7 +313,7 @@ export class Hud {
     if (st === 'asking' && act) {
       ic = 'question';
       head = act.asksUser ? 'Waiting for your answer' : 'Probably needs your OK';
-      sub = act.asksUser ? simplify(act.label, 12) : `Check Claude Code · ${simplify(act.text, 8)}`;
+      sub = esc(act.asksUser ? simplify(act.label, 12) : `Check Claude Code · ${simplify(act.text, 8)}`);
     } else if (st === 'working' && act) {
       ic = act.icon;
       brand = brandFor(act);

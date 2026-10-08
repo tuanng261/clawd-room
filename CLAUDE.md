@@ -21,7 +21,7 @@ Xcode project: `widget/build.sh` runs `swiftc`) and opens it. Rebuild after
 changing `widget/ClawdWidget.swift`; page changes show up when the widget
 reloads (quit and reopen it from its menu bar icon).
 
-## What Tuan wants (keep to this)
+## What Twan wants (keep to this)
 
 - **Every step looks like what it is.** A render happens at the render tower, a
   cut at the editing desk with scissors, a `git push` throws a paper plane. Two
@@ -78,7 +78,7 @@ original mascot.
 `npm run package` builds `dist/Clawd-Widget-macOS.zip`: a universal app with
 the server inside (`Resources/app`, three.js trimmed by
 `widget/collect-three.mjs`) that finds Node on the friend's Mac. It's ad-hoc
-signed only; publishing (GitHub, npm) and Apple signing are Tuan's call, so
+signed only; publishing (GitHub, npm) and Apple signing are Twan's call, so
 ask before doing any of it.
 
 ## How a step becomes an animation

@@ -100,11 +100,14 @@ export function pickBrand({ server = '', tools = [], text = '' }) {
   return best ? best.id : null;
 }
 
+// Brand names can come from a transcript (an unknown MCP server's name), so escape them.
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
 /** HTML for a badge (works on the server too — it's only a string). */
 export function badgeHtml(brand, cls = '') {
   const b = typeof brand === 'string' ? brandById(brand) : brand;
   if (!b) return '';
   const stripe = b.stripe ? `<i class="st">${b.stripe.map((c) => `<b style="background:${c}"></b>`).join('')}</i>` : '';
   const size = b.mono.length > 2 ? ' tiny' : '';
-  return `<span class="badge${size} ${cls}" style="--bb:${b.bg};--bf:${b.fg}" title="${b.name}">${b.mono}${stripe}</span>`;
+  return `<span class="badge${size} ${cls}" style="--bb:${b.bg};--bf:${b.fg}" title="${esc(b.name)}">${esc(b.mono)}${stripe}</span>`;
 }

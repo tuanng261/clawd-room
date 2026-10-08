@@ -189,7 +189,7 @@ function leadVerbActivity(d) {
   return null;
 }
 
-/** A project script's name often says what it does: capture-marketplace.mjs, look_and_cut.sh, enhance_voice.sh. */
+/** A project script's name often says what it does: capture-screens.mjs, look_and_cut.sh, enhance_voice.sh. */
 function scriptActivity(raw) {
   const names = [...raw.matchAll(/([\w.-]+)\.(m?js|ts|py|sh|zsh|rb)\b/g)].map((m) => m[1].toLowerCase()).join(' ');
   if (!names) return null;

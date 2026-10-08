@@ -2,3 +2,10 @@ node_modules/
 build/
 dist/
 .DS_Store
+# Never commit private things by accident: transcript copies, logs, secrets, personal Claude settings.
+*.jsonl
+*.log
+.env
+.env.*
+.npmrc
+.claude/settings.local.json

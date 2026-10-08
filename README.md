@@ -136,6 +136,10 @@ Every room finds its own place for each activity (no green screen in the classro
 
 **Time left:** if Claude made a task list, the estimate comes from how long the finished tasks took. Without a task list there's no honest estimate, so the panel shows each step instead.
 
+## Privacy
+
+Your sessions never leave your computer. The room only reads Claude Code's and Codex's log files (it never writes to them, installs hooks or changes any settings), and its server answers only this machine: it listens on `127.0.0.1` and turns away pages from other sites. Nothing about your sessions is sent anywhere; the only thing the page fetches from the internet is its two pixel fonts, from Google Fonts. Remember the room shows your prompts and commands, so mind your screen when you share or record it; `npm run demo` shows pretend sessions instead.
+
 ## Limits
 
 - Thinking summaries only appear when Claude Code saved one (about half the time), and only once that thought is finished.
@@ -172,3 +176,7 @@ Every room finds its own place for each activity (no green screen in the classro
 - `widget/package.sh`, `widget/collect-three.mjs`: the shareable app (server inside, only the bits of three.js it uses)
 
 `CLAUDE.md` has notes for Claude on how all this fits together and how to tailor Clawd to new kinds of sessions.
+
+## Not official
+
+A fan project. It isn't made by, affiliated with or endorsed by Anthropic or OpenAI. Claude, Claude Code and Clawd belong to Anthropic; Codex belongs to OpenAI. App names on the little connector badges belong to their owners.

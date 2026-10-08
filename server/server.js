@@ -1,6 +1,7 @@
 // Serves the web app and streams session state to it over Server-Sent Events.
 // Binds to 127.0.0.1 by default: transcripts contain prompts, commands and paths.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -92,13 +93,27 @@ export function createServer({ watcher, demo, demos = demo ? [demo] : [], demoOn
   function serveFile(res, file) {
     fs.stat(file, (err, st) => {
       if (err || !st.isFile()) { res.writeHead(404); res.end('not found'); return; }
+      let policy = null;
+      try { if (file.endsWith('.html')) policy = pagePolicy(file); } catch { res.writeHead(500); return res.end(); }
       res.writeHead(200, {
         'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
         'Content-Length': st.size,
         'Cache-Control': 'no-cache',
+        'X-Content-Type-Options': 'nosniff',
+        ...(policy ? { 'Content-Security-Policy': policy } : {}),
       });
-      fs.createReadStream(file).pipe(res);
+      fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
     });
+  }
+
+  // The page may only run its own scripts (plus its inline import map, by hash) and talk to this server,
+  // so text from a transcript can never run as code even if it slipped through unescaped.
+  function pagePolicy(file) {
+    const html = fs.readFileSync(file, 'utf8');
+    const hashes = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)]
+      .map((m) => `'sha256-${crypto.createHash('sha256').update(m[1]).digest('base64')}'`);
+    return [`default-src 'self'`, `script-src 'self' ${hashes.join(' ')}`, `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com`, `font-src 'self' https://fonts.gstatic.com`,
+      `img-src 'self' data:`, `object-src 'none'`, `base-uri 'none'`, `frame-ancestors 'none'`, `form-action 'none'`].join('; ');
   }
 
   const inside = (root, p) => {
@@ -106,17 +121,33 @@ export function createServer({ watcher, demo, demos = demo ? [demo] : [], demoOn
     return full === root || full.startsWith(root + path.sep) ? full : null;
   };
 
-  const server = http.createServer((req, res) => {
-    const url = new URL(req.url, 'http://localhost');
-    const p = decodeURIComponent(url.pathname);
+  // Only answer pages that are really on this machine. A web page can point its own domain
+  // at 127.0.0.1 ("DNS rebinding") and then read transcripts; its Host header gives it away.
+  const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
+
+  const JSON_HEAD = { 'Content-Type': MIME['.json'], 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' };
+
+  function handle(req, res) {
+    if (!LOCAL_HOST.test(req.headers.host || '')) { res.writeHead(403); return res.end(); }
+    // Read-only: nothing here changes anything, so only reading is allowed.
+    if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
+    let url, p;
+    try {
+      url = new URL(req.url, 'http://localhost');
+      p = decodeURIComponent(url.pathname);
+    } catch {
+      res.writeHead(400);
+      return res.end();
+    }
+    if (p.includes('\0')) { res.writeHead(400); return res.end(); } // file APIs throw on these
     if (p === '/api/stream') return stream(req, res);
     if (p === '/api/sessions') {
-      res.writeHead(200, { 'Content-Type': MIME['.json'] });
+      res.writeHead(200, JSON_HEAD);
       return res.end(JSON.stringify(list(Date.now()), null, 2));
     }
     if (p.startsWith('/api/session/')) {
       const m = getModel(p.slice('/api/session/'.length));
-      res.writeHead(m ? 200 : 404, { 'Content-Type': MIME['.json'] });
+      res.writeHead(m ? 200 : 404, JSON_HEAD);
       return res.end(m ? JSON.stringify(m.snapshot(Date.now()), null, 2) : '{}');
     }
     if (p.startsWith('/vendor/three/')) {
@@ -127,6 +158,16 @@ export function createServer({ watcher, demo, demos = demo ? [demo] : [], demoOn
     }
     const file = inside(WEB, p === '/' ? 'index.html' : p.slice(1));
     return file ? serveFile(res, file) : (res.writeHead(404), res.end());
+  }
+
+  // One odd request must never take the room down.
+  const server = http.createServer((req, res) => {
+    try {
+      handle(req, res);
+    } catch {
+      if (!res.headersSent) res.writeHead(500);
+      res.end();
+    }
   });
 
   return new Promise((resolve, reject) => {
