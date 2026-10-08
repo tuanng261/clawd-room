@@ -176,6 +176,23 @@ window.clawdRoom.hud.onStyle('auto');
 Helpers call `planFor(act, true, taken)` and prefer pieces nobody uses; spare
 furniture (no station role) beats someone's busy station.
 
+## The zoo (every session at once)
+
+`web/js/zoo.js`: each shown session (live ones first, then recent quiet ones,
+six at most) is a full `Room` built with `at: [x, z]`, so it's measured at the
+middle and then moved: anything comparing the camera to a room must subtract
+`room.group.position` (see `updateWalls`, `updateHolo`). Enclosures sit on a
+lawn in a grid `GAP` apart, each with a plaque; `world.setFrameShape()` frames
+all their outlines, and the sun's shadow covers the whole zoo while it's open.
+In the zoo, Clawds' labels and thoughts are hidden (the plaque says it).
+`main.js` switches `view` between 'room' and 'zoo' (Zoo button, Escape, click
+an enclosure). The corner widget has the zoo too (its own button on the
+caption, `Widget.setZoo`, caption from `zooGlance`, smaller plaques); only
+the pill leaves it. `npm run demo` / `npm run widget:demo` run six pretend
+agents (`--demo-zoo`, one Codex) and open straight into the zoo (`?zoo`). Ideas for later: helpers walking between enclosures, a beacon
+over one that needs you, Codex enclosures in their own corner, the zoo in the
+corner widget.
+
 ## Helpers and background tasks
 
 Subagents are mini Clawds in caps (`syncHelpers`); background commands
@@ -256,7 +273,7 @@ The pane is often hidden, which pauses animation frames. So:
 | `server/session.js` | replays a transcript into live state, log, turn stats, tool tallies |
 | `server/describe.js` | tool call → station, **activity**, sentence, MCP brand, edit line counts |
 | `server/theme.js` | which room a session gets |
-| `server/demo.js` | the looping demo (one story per room type) |
+| `server/demo.js` | the looping demo (one story per room type; `--demo-zoo` plays them all at once, the last one as Codex) |
 | `web/js/activities.js` | **the playbook**: where and how each activity is acted out |
 | `web/js/thinking.js` | thinking moods: words, pose, place |
 | `web/js/feelings.js` | how Clawd feels: what each step feels like, reactions, faces, body language, emoji |

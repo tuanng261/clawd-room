@@ -27,6 +27,8 @@ const SVG = {
   mini: '<svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12"/><path d="M12 14h6v4"/></svg>',
   pill: '<svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>',
   hide: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  zoo: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="7"/><rect x="14" y="4" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>',
+  room: '<svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14"/></svg>',
 };
 
 // The pill has no 3D Clawd, so its little face shows the feeling (style.css .wface.f-*).
@@ -80,9 +82,22 @@ function glanceText(s, now) {
   };
 }
 
+/** The zoo in a few words: how many agents are busy, and whether any of them needs you. */
+function zooGlance(list) {
+  const live = list.filter((s) => s.live);
+  const busy = live.filter((s) => s.status === 'working' || s.status === 'thinking').length;
+  const asking = live.filter((s) => s.status === 'working' && s.current?.asksUser).length;
+  const sub = `Clawd’s Zoo · ${list.length} agent${list.length === 1 ? '' : 's'} · click one to walk in`;
+  if (asking) return { tone: 'asking', head: `${asking} ${asking === 1 ? 'agent needs' : 'agents need'} you`, sub, since: null, mark: icon('question'), progress: null, feel: null };
+  if (busy) return { tone: 'working', head: `${busy} of ${list.length} agents at work`, sub, since: null, mark: SVG.zoo, progress: null, feel: null };
+  return { tone: 'idle', head: 'Every agent is resting', sub, since: null, mark: SVG.zoo, progress: null, feel: null };
+}
+
 export class Widget {
-  constructor({ onMode, onReset, onPinch, onSmartZoom }) {
+  constructor({ onMode, onReset, onPinch, onSmartZoom, onZoo }) {
     this.onMode = onMode;
+    this.onZoo = onZoo;
+    this.zoo = null; // the sessions in the zoo, while it's open
     this.onReset = onReset;
     this.onPinch = onPinch;
     this.onSmartZoom = onSmartZoom;
@@ -93,6 +108,7 @@ export class Widget {
     this.el.className = 'wdg';
     this.el.innerHTML = `<div class="wdg-grip" aria-hidden="true"><i></i></div>
       <div class="wdg-ctl">
+        <button data-w="zoo" title="See every agent at once">${SVG.zoo}</button>
         <button data-w="full" title="Open the full view">${SVG.full}</button>
         <button data-w="mini" title="Corner view">${SVG.mini}</button>
         <button data-w="pill" title="Shrink to a pill">${SVG.pill}</button>
@@ -114,7 +130,8 @@ export class Widget {
       const b = e.target.closest('[data-w]');
       if (!b) return;
       e.stopPropagation();
-      this.request(b.dataset.w);
+      if (b.dataset.w === 'zoo') this.onZoo?.();
+      else this.request(b.dataset.w);
     });
     this.el.addEventListener('click', (e) => {
       if (this.mode === 'pill' && e.target.closest('.wdg-pill')) this.request('mini');
@@ -150,7 +167,8 @@ export class Widget {
     if (mode === 'full' && bar) bar.prepend(this.ctl);
     else if (mode === 'mini') this.cap.append(this.ctl);
     else this.el.insertBefore(this.ctl, this.cap);
-    for (const b of this.ctl.querySelectorAll('[data-w]')) b.hidden = b.dataset.w === mode || (b.dataset.w === 'hide' && !nativeApp());
+    // The zoo button only lives in the corner view (the full view has its own, in the top bar).
+    for (const b of this.ctl.querySelectorAll('[data-w]')) b.hidden = b.dataset.w === mode || (b.dataset.w === 'hide' && !nativeApp()) || (b.dataset.w === 'zoo' && mode !== 'mini');
     this.onMode?.(mode);
     this.render();
   }
@@ -160,8 +178,17 @@ export class Widget {
     this.render();
   }
 
+  /** The zoo opened (with the sessions it shows), changed, or closed (null). */
+  setZoo(list) {
+    this.zoo = list;
+    const b = this.ctl.querySelector('[data-w="zoo"]');
+    b.innerHTML = list ? SVG.room : SVG.zoo;
+    b.title = list ? 'Back into one room' : 'See every agent at once';
+    this.render();
+  }
+
   render() {
-    const g = glance(this.snap);
+    const g = this.zoo ? zooGlance(this.zoo) : glance(this.snap);
     const time = g.since ? `<span class="wt" data-since="${g.since}">${fmtDur(clock.now() - g.since)}</span>` : '';
     const html = `<span class="wm">${g.mark}</span><span class="wx"><b>${esc(g.head)}</b>${g.sub ? `<small>${esc(g.sub)}</small>` : ''}</span>${time}`;
     const bar = g.progress != null ? `<i class="wbar"><b style="width:${Math.round(g.progress * 100)}%"></b></i>` : '';

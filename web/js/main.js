@@ -1,4 +1,5 @@
 import { Hud } from './hud.js';
+import { Zoo } from './zoo.js';
 import { Room } from './room.js';
 import { KIND_THEME, THEMES } from './themes.js';
 import { World } from './world.js';
@@ -12,6 +13,8 @@ let selected = null;
 let userPicked = false;
 let room = null;
 let following = false;
+let view = 'room'; // or 'zoo': every session at once
+let zoo = null;
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -19,7 +22,7 @@ const store = {
 };
 
 const hud = new Hud({
-  onSelect: (id) => select(id, true),
+  onSelect: (id) => (view === 'zoo' ? openFromZoo(id) : select(id, true)),
   onCamera: camera,
   onFocus: (id) => hud.setFocus(id),
   onStyle: (style) => {
@@ -64,17 +67,19 @@ function frameCamera() {
   hud.setFollow(false);
   world.setAutoFrame(subject, savedZoom());
 }
-const widget = WIDGET ? new Widget({ onMode: widgetMode, onReset: () => resetView(), onPinch: (amount, done) => world.pinchBy(amount, done), onSmartZoom: () => closeUp() }) : null;
+const widget = WIDGET ? new Widget({ onMode: widgetMode, onReset: () => resetView(), onPinch: (amount, done) => world.pinchBy(amount, done), onSmartZoom: () => closeUp(), onZoo: () => (view === 'zoo' ? leaveZoo() : enterZoo()) }) : null;
 world.nativePinch = document.body.classList.contains('in-app'); // the Mac app hands pinches over itself
 
 function widgetMode(mode) {
+  if (mode === 'pill' && view === 'zoo') leaveZoo(); // the pill has no 3D; the corner view can hold the whole zoo
   world.paused = mode === 'pill';
   world.maxFps = mode === 'mini' ? 30 : 0;
   world.controls.minDistance = mode === 'mini' ? 2 : 3; // zoom right up to Clawd
   world.maxRatio = mode === 'mini' ? 1 : 1.6; // the floating corner room never shrinks inside its window
   if (room) room.cards = mode === 'full';
   hud.layout();
-  if (mode !== 'pill') frameCamera(); // each size keeps its own zoom
+  if (mode !== 'pill' && view === 'zoo') world.setAutoFrame(subject, 1);
+  else if (mode !== 'pill') frameCamera(); // each size keeps its own zoom
 }
 
 // ── which room style to show ──────────────────────────────────
@@ -93,7 +98,7 @@ function wantedTheme(id) {
 
 function makeRoom(id, theme, from = null) {
   const summary = sessions.find((s) => s.id === id);
-  const agent = summary?.agent || snaps.get(id)?.agent || 'claude';
+  const agent = snaps.get(id)?.agent || summary?.agent || 'claude'; // the snapshot is fresher (the looping demo changes agents)
   const r = new Room(world, { id, demo: !!summary?.demo, theme, agent });
   r.cards = !widget || widget.mode === 'full'; // no info cards in the small widget views
   if (from) {
@@ -176,6 +181,7 @@ function select(id, byUser = false) {
 }
 
 function autoPick() {
+  if (view === 'zoo') return; // the zoo shows them all; you pick by clicking an enclosure
   const current = sessions.find((s) => s.id === selected);
   if (userPicked && current) return;
   const live = sessions.filter((s) => s.live && !s.demo);
@@ -205,15 +211,77 @@ function onSessions({ now, sessions: list }) {
   }
   autoPick();
   hud.setSessions(sessions, selected);
+  if (view === 'zoo') { zoo?.setSessions(sessions, snaps); widget?.setZoo(zoo.shown()); }
+  // `?zoo` in the address opens straight into the zoo (the demo zoo uses it).
+  if (startInZoo && sessions.length) { startInZoo = false; enterZoo(); }
 }
+let startInZoo = new URLSearchParams(location.search).has('zoo');
+
+// ── the zoo: every session at once ─────────────────────────────
+
+
+/** Step out of the room into the zoo, where every session is its own live enclosure. */
+function enterZoo() {
+  if (view === 'zoo' || document.body.dataset.mode === 'pill') return;
+  view = 'zoo';
+  document.body.dataset.view = 'zoo';
+  world.setInset(hud.insets());
+  room?.dispose();
+  room = null;
+  zoo = new Zoo(world, {
+    makeRoom: (s, at) => {
+      const r = new Room(world, { id: s.id, demo: !!s.demo, theme: wantedTheme(s.id), agent: s.agent || 'claude', at });
+      r.cards = false;
+      return r;
+    },
+  });
+  zoo.setSessions(sessions, snaps);
+  // Rooms we don't have the full picture of yet: ask for it.
+  for (const s of sessions) if (!snaps.has(s.id)) fetch(`/api/session/${encodeURIComponent(s.id)}`).then((r) => r.json()).then((x) => { if (x?.id) onSession({ now: null, session: x }); }).catch(() => {});
+  following = false;
+  hud.setFollow(false);
+  world.setAutoFrame(subject, 1);
+  world.fit(1.0);
+  updateViewBtn();
+}
+
+/** Clicked an enclosure: swoop down to it, then walk into its room. */
+function openFromZoo(id) {
+  const at = zoo?.penAt(id);
+  if (at) world.flyTo(at, 9, 0.6);
+  setTimeout(() => leaveZoo(id), at ? 550 : 0);
+}
+
+function leaveZoo(id = selected) {
+  if (view !== 'zoo') return;
+  view = 'room';
+  document.body.dataset.view = 'room';
+  world.setInset(hud.insets());
+  zoo?.dispose();
+  zoo = null;
+  world.setFrameShape();
+  const pick = id || sessions.find((s) => s.live)?.id || sessions[0]?.id;
+  if (pick) { selected = null; select(pick, true); }
+  updateViewBtn();
+}
+
+const viewBtn = document.getElementById('viewBtn');
+function updateViewBtn() {
+  if (!viewBtn) return;
+  viewBtn.querySelector('b').textContent = view === 'zoo' ? 'Room' : 'Zoo';
+  viewBtn.title = view === 'zoo' ? 'Back into the room' : 'See every agent at once, in the zoo';
+  widget?.setZoo(view === 'zoo' ? zoo.shown() : null);
+}
+viewBtn?.addEventListener('click', () => (view === 'zoo' ? leaveZoo() : enterZoo()));
 
 function onSession({ now, session }) {
   if (now) clock.sync(now);
   const prev = snaps.get(session.id);
   snaps.set(session.id, session);
+  if (view === 'zoo') zoo?.update(session);
   if (session.id !== selected) return;
   notify(prev, session);
-  if (room && wantedTheme(session.id) !== room.themeId) restyle();
+  if (room && wantedTheme(session.id) !== room.themeId) { restyle(); showAgent(session.agent); }
   else if (prev?.theme?.kind !== session.theme?.kind) updateStyleHud();
   room?.setState(session);
   hud.setSnapshot(session);
@@ -264,6 +332,7 @@ canvas.addEventListener('pointerdown', (e) => { down = [e.screenX, e.screenY]; }
 canvas.addEventListener('pointerup', (e) => {
   if (!down || Math.hypot(e.screenX - down[0], e.screenY - down[1]) > 5) return;
   const id = world.pick(e.clientX, e.clientY);
+  if (view === 'zoo') { const pen = zoo?.pick(e.clientX, e.clientY); if (pen) openFromZoo(pen); return; }
   if (id === 'main') {
     hud.setFocus('main');
     room?.petClawd();
@@ -284,7 +353,8 @@ canvas.addEventListener('pointermove', (e) => {
   if (moveFrame) return;
   moveFrame = requestAnimationFrame(() => {
     moveFrame = 0;
-    if (!room || !moveAt) return;
+    if (!moveAt) return;
+    if (!room) { canvas.style.cursor = zoo?.pick(moveAt[0], moveAt[1]) ? 'pointer' : ''; return; }
     const who = world.pick(moveAt[0], moveAt[1]);
     const prop = who ? null : room.propAt(moveAt[0], moveAt[1]);
     room.hover(prop);
@@ -301,11 +371,16 @@ function closeUp() {
   store.set(zoomKey(), close ? '0.3' : '1');
 }
 canvas.addEventListener('dblclick', closeUp);
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') room?.closeCard(); });
+// Escape: close a card if one is open, otherwise step out to the zoo.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (room?.carded) room.closeCard();
+  else if (view === 'room') enterZoo();
+});
 
 setInterval(() => room?.tickLabels(clock.now()), 250);
 hud.layout();
 connect();
 
 // Handy from the devtools console.
-window.clawdRoom = { world, hud, select: (id) => select(id, true), get room() { return room; }, get selected() { return selected; } };
+window.clawdRoom = { world, hud, select: (id) => select(id, true), enterZoo, leaveZoo, get zoo() { return zoo; }, get view() { return view; }, get room() { return room; }, get selected() { return selected; } };

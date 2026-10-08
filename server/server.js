@@ -20,13 +20,14 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
-export function createServer({ watcher, demo, port = 4747, host = '127.0.0.1' }) {
+/** `demos`: pretend sessions to show alongside (or, with `demoOnly`, instead of) the real ones. */
+export function createServer({ watcher, demo, demos = demo ? [demo] : [], demoOnly = false, port = 4747, host = '127.0.0.1' }) {
   const clients = new Set();
 
-  const getModel = (id) => (id === 'demo' ? demo?.model : watcher.sessions.get(id));
+  const getModel = (id) => demos.find((d) => d.id === id)?.model || (demoOnly ? null : watcher.sessions.get(id));
   const list = (now) => {
-    const l = watcher.list(now);
-    if (demo?.model) l.push(demo.model.summary(now));
+    const l = demoOnly ? [] : watcher.list(now);
+    for (const d of demos) if (d.model) l.push(d.model.summary(now));
     return l;
   };
 
@@ -64,7 +65,7 @@ export function createServer({ watcher, demo, port = 4747, host = '127.0.0.1' })
   }
 
   watcher.on('change', markDirty);
-  demo?.on('change', markDirty);
+  for (const d of demos) d.on('change', markDirty);
   setInterval(() => broadcastList(), 4000).unref();
   setInterval(() => { for (const c of clients) c.write(': ping\n\n'); }, 15000).unref();
 

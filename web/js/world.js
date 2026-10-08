@@ -105,6 +105,10 @@ export class World {
     this.inset = { left: 0, right: 0, top: 0, bottom: 0 };
     this.follow = null;
     this.flight = null;
+    // What the camera keeps in view: the room's outline, or the island's (setFrameShape).
+    this.framePoints = ROOM_POINTS;
+    this.frameCenter = ROOM_CENTER;
+    this.frameMargin = 0.96;
     this.maxRatio = 1.6; // how far past "the whole room" you can zoom out (the corner view: not at all)
     this.paused = false; // widget pill: no 3D at all
     this.maxFps = 0; // widget corner: 30 is plenty and kinder to the battery
@@ -191,20 +195,20 @@ export class World {
    * screen, centred: find the closest distance at which the room's outline
    * fits, then shift the aim so the outline sits in the middle (a few rounds).
    */
-  frameRoom(dir = VIEW_DIR, margin = 0.96) {
+  frameRoom(dir = VIEW_DIR, margin = this.frameMargin) {
     const { w, h } = this.viewSize();
     const { left, right, top, bottom } = this.insetTarget || this.inset;
     const fx = clamp((w - left - right) / w, 0.3, 1) * margin;
     const fy = clamp((h - top - bottom) / h, 0.3, 1) * margin;
     const cam = new THREE.PerspectiveCamera(this.camera.fov, w / h, 0.1, 500);
-    const target = ROOM_CENTER.clone();
+    const target = this.frameCenter.clone();
     const v = new THREE.Vector3();
     const outline = (d) => {
       cam.position.copy(target).addScaledVector(dir, d);
       cam.lookAt(target);
       cam.updateMatrixWorld();
       const b = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
-      for (const p of ROOM_POINTS) {
+      for (const p of this.framePoints) {
         v.copy(p).project(cam);
         b.x0 = Math.min(b.x0, v.x); b.x1 = Math.max(b.x1, v.x);
         b.y0 = Math.min(b.y0, v.y); b.y1 = Math.max(b.y1, v.y);
@@ -227,6 +231,14 @@ export class World {
       target.addScaledVector(new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1), ((b.y0 + b.y1) / 2) * halfH);
     }
     return { target, distance };
+  }
+
+  /** Frame a different shape (the island, or back to the room): outline points and a centre. */
+  setFrameShape(points = ROOM_POINTS, center = ROOM_CENTER, margin = 0.96) {
+    this.framePoints = points;
+    this.frameCenter = center;
+    this.frameMargin = margin;
+    if (this.autoFrame) this.autoFrame.base = null;
   }
 
   /** Kept for callers that only want the distance. */

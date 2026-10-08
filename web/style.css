@@ -870,3 +870,29 @@ body.widget[data-mode="pill"] .wdg-emo { display: block; position: fixed; left: 
 /* Codex's pill face: a charcoal little terminal with a light screen. */
 body[data-agent="codex"] .wface { background: linear-gradient(#eef1ef, #eef1ef) center 5px / 28px 17px no-repeat, #2f3238; box-shadow: none; }
 body[data-agent="codex"] .wface::before, body[data-agent="codex"] .wface::after { background: #2f3238; }
+
+/* The zoo (zoo.js): a plaque in front of each enclosure, a sign over the gate. */
+body[data-view="zoo"] .stylepick { display: none; }
+/* The status card, chat and progress belong to one session: only shown inside its room. */
+body[data-view="zoo"] :is(#side, #progress) { display: none; }
+.zoo-plaque {
+  display: flex; flex-direction: column; gap: 1px; min-width: 150px; max-width: 220px;
+  padding: 6px 10px 7px; background: var(--kraft-soft); color: var(--slate);
+  border: 2px solid var(--border); box-shadow: 3px 3px 0 rgba(61, 57, 41, 0.22);
+}
+.zoo-plaque b { font: 400 10px var(--pixel); text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.zoo-plaque small { display: flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--clay-deep); }
+.zoo-plaque small svg { width: 11px; height: 11px; }
+.zoo-plaque span { font-size: 12px; line-height: 1.25; }
+.zoo-plaque.quiet { opacity: 0.7; }
+.zoo-gate { padding: 3px 10px; background: var(--clay); color: #fff; border: 2px solid var(--border); font: 400 11px var(--pixel); text-transform: uppercase; white-space: nowrap; }
+/* From the zoo's distance, one plaque per enclosure says it all: no labels, thoughts or pop-up names. */
+body[data-view="zoo"] :is(.tag, .bubble, .getlbl, .floaty) { display: none; }
+/* The widget is something you look at, not read: no text selection (a stray triple-click tinted the whole room blue). */
+body.widget { -webkit-user-select: none; user-select: none; }
+/* The zoo in the corner widget: small plaques, just whose room it is and one line of what it's doing. */
+body.widget[data-mode="mini"] .zoo-plaque { min-width: 0; max-width: 96px; padding: 2px 5px 3px; border-width: 1.5px; box-shadow: 2px 2px 0 rgba(61, 57, 41, 0.2); }
+body.widget[data-mode="mini"] .zoo-plaque b { font-size: 6.5px; }
+body.widget[data-mode="mini"] .zoo-plaque small { display: none; }
+body.widget[data-mode="mini"] .zoo-plaque span { font-size: 8.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+body.widget[data-mode="mini"] .zoo-gate { font-size: 7px; padding: 2px 6px; }

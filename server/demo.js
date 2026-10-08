@@ -12,6 +12,8 @@ const DES = '/Users/you/Design/summer-sale';
 const d = (p) => `${DES}/${p}`;
 const STU = '/Users/you/Study/interview-prep';
 const s2 = (p) => `${STU}/${p}`;
+const TRIP = '/Users/you/Documents/kyoto-trip';
+const k = (p) => `${TRIP}/${p}`;
 // Fake edit contents, so the room can show "+added −removed" lines.
 const lines = (n, tag = 'line') => Array.from({ length: n }, (_, i) => `${tag} ${i + 1}`).join('\n');
 const change = (add, del) => ({ old_string: lines(del, 'old'), new_string: lines(add, 'new') });
@@ -53,6 +55,46 @@ const SCENARIOS = [
             { say: 'Found 6 hard-coded colors in 3 components.', end: true },
           ],
         },
+      },
+      {
+        tool: 'Agent', dur: 0.8,
+        input: { description: 'Check colour contrast', subagent_type: 'general-purpose', prompt: 'Check every text colour in the dark palette against WCAG AA contrast.' },
+        agent: {
+          id: 'demo-helper-2', type: 'general-purpose', description: 'Check colour contrast',
+          steps: [
+            { think: 1.5 },
+            { tool: 'Read', input: { file_path: f('src/theme/tokens.ts') }, dur: 2 },
+            { tool: 'WebFetch', input: { url: 'https://www.w3.org/WAI/WCAG21/Understanding/contrast-minimum' }, dur: 3 },
+            { tool: 'Bash', input: { command: 'node scripts/contrast-check.mjs src/theme/dark.css', description: 'Check the contrast of every colour pair' }, dur: 4 },
+            { think: 1.5 },
+            { say: 'Two muted greys fail AA on the dark background; suggested lighter values.', end: true },
+          ],
+        },
+      },
+      {
+        tool: 'Agent', dur: 0.8,
+        input: { description: 'Write toggle tests', subagent_type: 'general-purpose', prompt: 'Write unit tests for a ThemeToggle switch component.' },
+        agent: {
+          id: 'demo-helper-3', type: 'general-purpose', description: 'Write toggle tests',
+          steps: [
+            { think: 1.5 },
+            { tool: 'Glob', input: { pattern: 'src/**/*.test.tsx' }, dur: 1.5 },
+            { tool: 'Read', input: { file_path: f('src/components/Header.test.tsx') }, dur: 2 },
+            { tool: 'Write', input: { file_path: f('src/components/ThemeToggle.test.tsx'), content: lines(36) }, dur: 4 },
+            { tool: 'Bash', input: { command: 'npx vitest run src/components/ThemeToggle.test.tsx', description: 'Run the new toggle tests' }, dur: 4 },
+            { say: 'Added 4 tests for the toggle: renders, flips aria-checked, keyboard, remembers the choice.', end: true },
+          ],
+        },
+      },
+      {
+        tool: 'Bash', dur: 0.6,
+        input: { command: 'npm run build', description: 'Build the production bundle', run_in_background: true },
+        bg: { id: 'demo-build', runFor: 26, summary: 'Background command "Build the production bundle" completed (exit code 0)' },
+      },
+      {
+        tool: 'Bash', dur: 0.6,
+        input: { command: 'node scripts/capture-pages.mjs --theme dark', description: 'Capture screenshots of every page in dark mode', run_in_background: true },
+        bg: { id: 'demo-shots', runFor: 30, summary: 'Background command "Capture screenshots of every page in dark mode" completed (exit code 0)' },
       },
       { tool: 'TaskUpdate', input: { taskId: '1', status: 'in_progress' }, dur: 0.4 },
       { tool: 'Edit', input: { file_path: f('src/theme/tokens.ts'), ...change(12, 3) }, dur: 3 },
@@ -316,13 +358,57 @@ const SCENARIOS = [
       { say: 'Found it: shipping rates were refetched on every keystroke. They are now debounced and cached per postcode, which cut 38 requests to 1.', end: true },
     ],
   },
+  {
+    // Another agent, not just Claude: a Codex session planning a trip, in the cozy room.
+    title: 'Demo: plan a weekend in Kyoto',
+    cwd: TRIP,
+    agent: 'codex',
+    steps: [
+      { prompt: 'Plan a relaxed weekend in Kyoto for two, mid-October, and put it on my calendar' },
+      { think: 3, thought: 'Relaxed means few stops a day. Check the weather and festivals that weekend first, then pick a calm area to stay in.' },
+      { tool: 'WebSearch', input: { query: 'Kyoto weather mid October festivals' }, dur: 3 },
+      { tool: 'WebFetch', input: { url: 'https://www.japan-guide.com/e/e2158.html' }, dur: 3 },
+      { tool: 'TaskCreate', input: { subject: 'Pick where to stay' }, dur: 0.5 },
+      { tool: 'TaskCreate', input: { subject: 'Plan Saturday and Sunday' }, dur: 0.5 },
+      { tool: 'TaskCreate', input: { subject: 'Add it to the calendar' }, dur: 0.5 },
+      {
+        tool: 'Agent', dur: 0.7,
+        input: { description: 'Compare places to stay', subagent_type: 'general-purpose', prompt: 'Compare three quiet ryokan near Higashiyama for two nights.' },
+        agent: {
+          id: 'demo-helper-9', type: 'general-purpose', description: 'Compare places to stay',
+          steps: [
+            { tool: 'WebSearch', input: { query: 'quiet ryokan Higashiyama Kyoto reviews' }, dur: 3 },
+            { tool: 'WebFetch', input: { url: 'https://example.com/ryokan-guide' }, dur: 3 },
+            { say: 'The one by the Philosopher’s Path is quietest and walkable to both temples.', end: true },
+          ],
+        },
+      },
+      { tool: 'TaskUpdate', input: { taskId: '1', status: 'in_progress' }, dur: 0.4 },
+      { wait: 'demo-helper-9' },
+      { tool: 'TaskUpdate', input: { taskId: '1', status: 'completed' }, dur: 0.4 },
+      { tool: 'TaskUpdate', input: { taskId: '2', status: 'in_progress' }, dur: 0.4 },
+      { think: 3, thought: 'Temples early before the crowds, a long lunch, the river at sunset. Keep Sunday afternoon free for the train.' },
+      { tool: 'Write', input: { file_path: k('itinerary.md'), content: lines(40) }, dur: 3 },
+      { tool: 'Edit', input: { file_path: k('itinerary.md'), ...change(6, 2) }, dur: 2 },
+      { tool: 'TaskUpdate', input: { taskId: '2', status: 'completed' }, dur: 0.4 },
+      { tool: 'TaskUpdate', input: { taskId: '3', status: 'in_progress' }, dur: 0.4 },
+      { tool: 'mcp__google_calendar__create_event', input: { summary: 'Kyoto weekend', start: '2026-10-17', end: '2026-10-18' }, dur: 2.5 },
+      { tool: 'TaskUpdate', input: { taskId: '3', status: 'completed' }, dur: 0.4 },
+      { say: 'Your Kyoto weekend is planned: a quiet ryokan by the Philosopher’s Path, two easy days, and it’s on your calendar.', end: true },
+    ],
+  },
 ];
 
 const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000));
 
 export class Demo extends EventEmitter {
-  constructor() {
+  /** `scenario` plays just that story on repeat (the demo zoo runs one Demo per story); otherwise they take turns. */
+  constructor({ id = 'demo', scenario = null, delay = 0, rest = 22 } = {}) {
     super();
+    this.id = id;
+    this.scenario = scenario;
+    this.delay = delay;
+    this.rest = rest; // seconds to show the finished story before it starts again
     this.model = null;
     this.running = false;
     this.seq = 0;
@@ -340,7 +426,7 @@ export class Demo extends EventEmitter {
   }
 
   fresh(title, cwd = ROOT) {
-    const m = new SessionModel({ id: 'demo', file: null, projectKey: 'demo' });
+    const m = new SessionModel({ id: this.id, file: null, projectKey: 'demo' });
     m.demo = true;
     m.title = title;
     m.cwd = cwd;
@@ -351,19 +437,22 @@ export class Demo extends EventEmitter {
   }
 
   async loop() {
-    let k = 0;
+    let k = this.scenario ?? 0;
+    let wait = this.delay; // show up straight away, start a little later (so a zoo of demos isn't in step)
     while (this.running) {
-      const sc = SCENARIOS[k++ % SCENARIOS.length];
+      const sc = SCENARIOS[this.scenario ?? k++ % SCENARIOS.length];
       const m = this.fresh(sc.title, sc.cwd);
+      m.agent = sc.agent || null;
       this.waiters.clear();
       this.changed();
+      if (wait) { await sleep(wait); wait = 0; }
       await this.run(m, sc.steps, null);
-      await sleep(22);
+      await sleep(this.rest);
     }
   }
 
   changed() {
-    this.emit('change', 'demo');
+    this.emit('change', this.id);
   }
 
   rec(type, extra) {

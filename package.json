@@ -17,7 +17,9 @@
     "start": "node bin/clawd-room.js",
     "dev": "node --watch-path=server --watch-path=bin bin/clawd-room.js",
     "check": "node server/selftest.js",
+    "demo": "node bin/clawd-room.js --demo-zoo --port 4748",
     "widget": "bash widget/build.sh && open \"build/Clawd Widget.app\"",
+    "widget:demo": "pkill -x ClawdWidget; open -n \"build/Clawd Widget.app\" --args --demo",
     "package": "bash widget/package.sh"
   },
   "engines": {

@@ -151,13 +151,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         return fm.isExecutableFile(atPath: out) ? out : nil
     }
 
-    private var base: String { "http://127.0.0.1:\(config.port)" }
+    /// `--demo` (npm run widget:demo): the demo zoo's pretend agents, on their own port, never your real sessions.
+    private let demo = CommandLine.arguments.contains("--demo")
+    private var port: Int { demo ? 4748 : config.port }
+    private var base: String { "http://127.0.0.1:\(port)" }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildPanel()
         buildMenu()
         showMessage("Waking Clawd up…")
         startServerIfNeeded { [weak self] in self?.loadRoom() }
+    }
+
+    /// Opening the app again (Finder, Spotlight, `open`) brings a hidden widget back.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        panel.orderFrontRegardless()
+        updateMenu()
+        return false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -374,7 +384,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
 
     private func loadRoom() {
         loaded = true
-        if let url = URL(string: "\(base)/?widget&mode=\(mode.rawValue)") { web.load(URLRequest(url: url)) }
+        // The demo opens straight into the zoo, so all its agents are in view.
+        if let url = URL(string: "\(base)/?widget&mode=\(mode.rawValue)\(demo ? "&zoo" : "")") { web.load(URLRequest(url: url)) }
     }
 
     private func showMessage(_ text: String) {
@@ -416,7 +427,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: node)
-        p.arguments = ["bin/clawd-room.js", "--port", String(config.port)]
+        p.arguments = ["bin/clawd-room.js", "--port", String(port)] + (demo ? ["--demo-zoo"] : [])
         p.currentDirectoryURL = URL(fileURLWithPath: serverDir)
         let log = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/ClawdWidget.log")
         FileManager.default.createFile(atPath: log.path, contents: nil)

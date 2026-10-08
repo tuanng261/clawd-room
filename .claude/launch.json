@@ -4,8 +4,21 @@
     {
       "name": "clawd-room",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["bin/clawd-room.js"],
+      "runtimeArgs": [
+        "bin/clawd-room.js"
+      ],
       "port": 4747
+    },
+    {
+      "name": "clawd-demo-zoo",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "bin/clawd-room.js",
+        "--demo-zoo",
+        "--port",
+        "4748"
+      ],
+      "port": 4748
     }
   ]
 }

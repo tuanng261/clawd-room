@@ -213,6 +213,9 @@ export class Sparks {
   }
 }
 
+let lastPopAt = -Infinity; // ms, the latest emoji any Clawd popped
+const CALM_POP_GAP = 3500;
+
 export class Clawd {
   constructor({ color = '#d97757', scale = 1, hat = null, id = 'main', speed = 3, skin = 'clawd' } = {}) {
     this.id = id;
@@ -780,6 +783,10 @@ export class Clawd {
     const F = FEELINGS[id];
     if (!F?.emoji?.length || this.vanishing || this.appear < 1) return false;
     if (this.now - this.emojiAt < (urgent ? 0.6 : this.emojiGap)) return false;
+    // Calm emoji take turns across every Clawd on screen (a zoo has many), so only one or two show at once.
+    const wall = performance.now();
+    if (!urgent && wall - lastPopAt < CALM_POP_GAP) return false;
+    lastPopAt = wall;
     this.emojiAt = this.now;
     this.emojiFeel = id;
     // One at a time: a new emoji replaces the one still showing.

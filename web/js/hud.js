@@ -576,6 +576,8 @@ export class Hud {
     const mode = document.body.dataset.mode;
     if (mode === 'mini') return { left: 0, right: 0, top: 0, bottom: 50 };
     if (mode === 'pill') return { left: 0, right: 0, top: 0, bottom: 0 };
+    // The zoo has no session panels: the whole window is the view.
+    if (document.body.dataset.view === 'zoo') return { left: 0, right: 0, top: 70, bottom: 0 };
     const narrow = window.innerWidth <= 860;
     const side = $('side').getBoundingClientRect();
     const prog = $('progress').getBoundingClientRect();

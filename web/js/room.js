@@ -105,7 +105,7 @@ const GHOST = 0.13;
 const WALLS = { back: { axis: 'z', at: -4.05 }, left: { axis: 'x', at: -4.05 } };
 
 export class Room {
-  constructor(world, { id, demo = false, theme = 'cozy', agent = 'claude' }) {
+  constructor(world, { id, demo = false, theme = 'cozy', agent = 'claude', at = null }) {
     this.agent = agent; // 'codex' sessions get Codex's mascot
     this.world = world;
     this.id = id;
@@ -118,6 +118,8 @@ export class Room {
     this.navSqueeze = new NavGrid(FLOOR); // light things only block where they really are (brushing past)
     this.navLoose = new NavGrid(FLOOR); // …or not at all (what Clawd could shove aside)
     this.build();
+    // In the zoo, rooms stand side by side: built at the middle (so everything measured stays local), then moved.
+    if (at) this.group.position.set(at[0], 0, at[1]);
 
     this.clawd = new Clawd({ id: 'main', skin: agent === 'codex' ? 'codex' : 'clawd' });
     this.clawd.wear(this.theme.accessory);
@@ -641,7 +643,7 @@ export class Room {
 
   /** Fade a wall (and what hangs on it) when the camera is on its outside. */
   updateWalls(dt) {
-    const cam = this.world.camera.position;
+    const cam = this.world.camera.position.clone().sub(this.group.position); // as seen from this room (zoo rooms aren't at the middle)
     const len = Math.hypot(cam.x, cam.y, cam.z) || 1;
     for (const w of this.walls) {
       // How far in front of the wall's inside face the camera is (≈ −1 … 1).
@@ -1749,7 +1751,7 @@ export class Room {
     H.group.visible = visible;
     H.ring.visible = visible;
     if (!visible) return;
-    const cam = this.world.camera.position;
+    const cam = this.world.camera.position.clone().sub(this.group.position);
     let rx = Math.cos(c.heading);
     let rz = -Math.sin(c.heading);
     if (rx * (cam.x - c.pos.x) + rz * (cam.z - c.pos.y) < 0) { rx = -rx; rz = -rz; }
